@@ -1,0 +1,12 @@
+[project]
+name = "plant-splat"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "gsplat>=1.5.3",
+    "nerfstudio>=0.3.4",
+    "numpy>=2.4.0",
+    "opencv-python>=4.6.0.66",
+]
