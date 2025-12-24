@@ -22,22 +22,30 @@ make -j8
 cd ../../..
 ```
 
-## Reconstruction Pipeline
-
-Convert a video of a plant into a Gaussian splat:
+## Usage
 
 ```bash
-# Full pipeline: video → frames → COLMAP → OpenSplat
-uv run python -m src.reconstruct data/raw/mint.MOV -o data --name mint
+# Full scene (includes background)
+uv run python -m src.reconstruct data/raw/plant.MOV
 
-# With custom parameters
-uv run python -m src.reconstruct data/raw/mint.MOV \
-    --frame-skip 10 \   # Extract every Nth frame (default: 10)
-    --iters 3000 \      # Training iterations (default: 3000)
-    --downscale 1       # Image scale factor (default: 1, use 2 for faster/lower quality)
+# Isolated plant (background removed)
+uv run python -m src.reconstruct data/raw/plant.MOV --isolate
 ```
 
-Output: `data/splats/<name>.ply`
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--isolate` | off | Remove background (SAM 2 + filtering + post-process) |
+| `--name` | video filename | Project name |
+| `--frame-skip` | 20 | Extract every Nth frame |
+| `--iters` | 3000 | Training iterations |
+| `--downscale` | 1 | Image scale factor |
+
+### Output
+
+- Full scene: `data/splats/<name>.ply`
+- Isolated: `data/splats/<name>_clean.ply`
 
 ## Viewing Splats
 

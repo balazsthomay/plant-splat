@@ -6,7 +6,45 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 plant-splat is a synthetic data pipeline for plant disease detection. It uses 3D Gaussian splatting to capture real plants, then renders synthetic training images with varied lighting, viewpoints, and backgrounds. Disease variants are synthesized using diffusion models. The end goal: prove synthetic data can train models that work on real plants.
 
-Current phase: Capture & Reconstruct (reproducing COLMAP + OpenSplat pipeline).
+Current phase: Background Removal (Phase 1.5)
+
+## Architecture
+
+### Isolation Pipeline (video → plant-only splat)
+```
+video.MOV
+    ↓ ffmpeg (extract every Nth frame)
+frames/*.jpg
+    ↓ SAM 2 video predictor (src/segment.py)
+frames/*_mask.png (binary masks)
+    ↓ COLMAP (feature extraction, matching, SfM)
+sparse/0/points3D.bin (181k 3D points, includes background)
+    ↓ filter by mask projection (src/filter_points.py)
+sparse_filtered/0/points3D.bin (129k points, plant only)
+    ↓ OpenSplat (Gaussian splatting)
+plant.ply (isolated plant, no background)
+```
+
+### Key Scripts
+- `src/reconstruct.py`: Full pipeline orchestrator (video → splat)
+- `src/segment.py`: SAM 2 video predictor, center point prompt on frame 0
+- `src/filter_points.py`: Projects 3D points to cameras, keeps foreground points
+
+### External Tools
+- `tools/OpenSplat/`: Patched OpenSplat with optional masked loss support
+  - Mask loading is automatic if `{image}_mask.png` exists
+  - Fully backward compatible (no masks = original behavior)
+- COLMAP: `/opt/homebrew/bin/colmap`
+
+### Data Layout
+```
+data/
+├── colmap/{project}/
+│   ├── images/           # Extracted frames + masks
+│   ├── sparse/0/         # COLMAP reconstruction
+│   └── sparse_filtered/0/ # Filtered (plant-only) points
+└── splats/               # Output .ply files
+```
 
 ## Development Commands
 
@@ -20,13 +58,12 @@ uv sync
 uv run python main.py
 ```
 
-## Key Libraries (planned)
+## Key Libraries
 
-- **3D Rendering:** gsplat, nerfstudio
-- **Image Processing:** opencv, numpy
-- **Disease Synthesis:** diffusers, ControlNet
-- **Detection:** pytorch, ultralytics (YOLO)
-- **Reconstruction:** COLMAP, OpenSplat
+- **Segmentation:** sam-2 (SAM 2 video predictor, runs on CPU)
+- **Reconstruction:** COLMAP (SfM), OpenSplat (Gaussian splatting, runs on MPS)
+- **Image Processing:** opencv, numpy, PIL
+- **Future:** diffusers (disease synthesis), ultralytics (detection)
 
 ## Code Style
 
