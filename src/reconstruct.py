@@ -1,7 +1,7 @@
 """
 COLMAP + OpenSplat reconstruction pipeline.
 
-Converts video → frames → COLMAP SfM → Gaussian splat.
+Converts video → frames → (optional SAM 3 masks) → COLMAP SfM → Gaussian splat.
 """
 
 import subprocess
@@ -54,6 +54,21 @@ def extract_frames(
     frames = list(output_dir.glob("frame_*.jpg"))
     print(f"  ✓ {len(frames)} frames extracted")
     return len(frames)
+
+
+def segment_frames(images_dir: Path) -> int:
+    """Run SAM 2 segmentation on all frames.
+
+    Uses automatic mask generation, selects largest mask per frame.
+
+    Args:
+        images_dir: Directory containing images
+
+    Returns:
+        Number of masks generated
+    """
+    from src.segment import segment_directory
+    return segment_directory(images_dir)
 
 
 def run_colmap(project_dir: Path, single_camera: bool = True) -> Path:
@@ -148,6 +163,7 @@ def reconstruct(
     frame_skip: int = 10,
     num_iters: int = 3000,
     downscale: int = 1,
+    segment: bool = False,
 ) -> Path:
     """Full pipeline: video → Gaussian splat.
 
@@ -158,6 +174,7 @@ def reconstruct(
         frame_skip: Extract every Nth frame
         num_iters: OpenSplat training iterations
         downscale: Image downscale factor
+        segment: If True, run SAM 2 segmentation for background removal
 
     Returns:
         Path to output .ply file
@@ -168,15 +185,21 @@ def reconstruct(
 
     print(f"\n{'='*60}")
     print(f"Reconstructing: {video_path.name} → {splat_path.name}")
+    if segment:
+        print("  (with SAM 2 segmentation)")
     print(f"{'='*60}\n")
 
     # Step 1: Extract frames
     extract_frames(video_path, project_dir / "images", frame_skip)
 
-    # Step 2: COLMAP SfM
+    # Step 2: Generate masks (optional)
+    if segment:
+        segment_frames(project_dir / "images")
+
+    # Step 3: COLMAP SfM (uses original images for feature matching)
     run_colmap(project_dir)
 
-    # Step 3: OpenSplat
+    # Step 4: OpenSplat (uses masks if present)
     run_opensplat(project_dir, splat_path, num_iters, downscale)
 
     print(f"\n{'='*60}")
@@ -196,6 +219,7 @@ if __name__ == "__main__":
     parser.add_argument("--frame-skip", type=int, default=10, help="Extract every Nth frame")
     parser.add_argument("--iters", type=int, default=3000, help="Training iterations")
     parser.add_argument("--downscale", type=int, default=1, help="Image downscale factor")
+    parser.add_argument("--segment", action="store_true", help="Enable SAM 2 segmentation for background removal")
 
     args = parser.parse_args()
 
@@ -206,4 +230,5 @@ if __name__ == "__main__":
         args.frame_skip,
         args.iters,
         args.downscale,
+        args.segment,
     )
