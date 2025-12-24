@@ -9,6 +9,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Add src/ to path for imports when running as script
+sys.path.insert(0, str(Path(__file__).parent))
+
 
 # Tool paths (adjust if needed)
 COLMAP_BIN = "/opt/homebrew/bin/colmap"
@@ -68,7 +71,7 @@ def segment_frames(images_dir: Path) -> int:
     Returns:
         Number of masks generated
     """
-    from src.segment import segment_directory
+    from segment import segment_directory
     return segment_directory(images_dir)
 
 
@@ -83,7 +86,7 @@ def filter_point_cloud(sparse_dir: Path, images_dir: Path, min_ratio: float = 0.
     Returns:
         Path to filtered sparse reconstruction
     """
-    from src.filter_points import filter_points
+    from filter_points import filter_points
 
     output_dir = sparse_dir.parent.parent / "sparse_filtered" / "0"
     filter_points(sparse_dir, images_dir, output_dir, min_ratio)
@@ -137,7 +140,7 @@ def postprocess_splat(
     Returns:
         Path to output PLY
     """
-    from src.filter_splat import filter_splat
+    from filter_splat import filter_splat
 
     filter_splat(input_ply, output_ply, opacity_threshold, None, None, percentile)
     return output_ply
@@ -266,6 +269,19 @@ def reconstruct(
     else:
         print("  Mode: Full scene")
     print(f"{'='*60}\n")
+
+    # Clean up stale data if re-running
+    if (project_dir / "database.db").exists():
+        print("[reconstruct] Cleaning up previous run...")
+        (project_dir / "database.db").unlink()
+        import shutil
+        if (project_dir / "sparse").exists():
+            shutil.rmtree(project_dir / "sparse")
+        if (project_dir / "sparse_filtered").exists():
+            shutil.rmtree(project_dir / "sparse_filtered")
+        # Remove old images and masks
+        if (project_dir / "images").exists():
+            shutil.rmtree(project_dir / "images")
 
     # Step 1: Extract frames
     extract_frames(video_path, project_dir / "images", frame_skip)

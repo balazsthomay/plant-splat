@@ -42,7 +42,7 @@ def prepare_frames_dir(images_dir: Path, tmp_dir: Path) -> list[Path]:
 
 def segment_video(
     images_dir: Path,
-    device: str = "mps",
+    device: str = "cpu",  # SAM 2 requires CPU (MPS doesn't support float64)
     model_id: str = "facebook/sam2.1-hiera-large",
 ) -> int:
     """Segment all frames using video predictor with propagation.
@@ -122,7 +122,7 @@ def segment_video(
 
 
 # Keep old function name for compatibility with reconstruct.py
-def segment_directory(images_dir: Path, pattern: str = "*.jpg", device: str = "mps") -> int:
+def segment_directory(images_dir: Path, pattern: str = "*.jpg", device: str = "cpu") -> int:
     """Wrapper for backward compatibility."""
     return segment_video(images_dir, device=device)
 
@@ -130,7 +130,7 @@ def segment_directory(images_dir: Path, pattern: str = "*.jpg", device: str = "m
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate segmentation masks using SAM 2 video predictor")
     parser.add_argument("images_dir", type=Path, help="Directory containing image frames")
-    parser.add_argument("--device", default="mps", help="Device (mps, cuda, cpu)")
+    parser.add_argument("--device", default="cpu", help="Device (cpu, cuda) - MPS not supported")
     parser.add_argument("--model", default="facebook/sam2.1-hiera-large", help="Model ID")
 
     args = parser.parse_args()

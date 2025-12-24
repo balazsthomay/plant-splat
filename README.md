@@ -26,10 +26,10 @@ cd ../../..
 
 ```bash
 # Full scene (includes background)
-uv run python -m src.reconstruct data/raw/plant.MOV
+uv run src/reconstruct.py data/raw/plant.MOV
 
 # Isolated plant (background removed)
-uv run python -m src.reconstruct data/raw/plant.MOV --isolate
+uv run src/reconstruct.py data/raw/plant.MOV --isolate
 ```
 
 ### Options
