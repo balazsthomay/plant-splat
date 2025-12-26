@@ -137,3 +137,36 @@ data/synthetic/
 ### GPU Rental (for large datasets)
 
 For 1000+ images, rent a GPU. RTX 3060/3070 is plenty for 31k Gaussians. Budget ~20GB storage (splat + outputs + deps).
+
+## Disease Synthesis
+
+Apply diseases to healthy renders using SD 1.5 inpainting:
+
+```bash
+# Random diseases, severity 0.3-0.7
+uv run src/synthesize_disease.py data/synthetic/ -o data/synthetic_diseased/
+
+# Specific disease
+uv run src/synthesize_disease.py data/synthetic/ --disease powdery_mildew
+```
+
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-o` | `data/synthetic_diseased/` | Output directory |
+| `-n` | all | Number of images |
+| `--disease` | random | `powdery_mildew`, `leaf_spot`, `rust`, `chlorosis`, `blight` |
+| `--severity-min` | 0.3 | Min severity (0-1) |
+| `--severity-max` | 0.7 | Max severity (0-1) |
+| `--steps` | 30 | Diffusion steps (lower = faster) |
+
+### Output
+
+```
+data/synthetic_diseased/
+├── images/          # Diseased images
+├── masks/           # Plant masks
+├── disease_masks/   # Affected regions
+└── annotations.json
+```
