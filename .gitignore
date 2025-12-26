@@ -10,7 +10,10 @@ wheels/
 .venv
 
 plans/
-data/
+data/*
+!data/splats/
 thoughts/
 tools/
 .claude/
+
+.DS_Store

@@ -70,3 +70,70 @@ SAM 2 uses a center point prompt on frame 0—it clicks the exact center of the 
 ## Viewing Splats
 
 Load `.ply` files in [SuperSplat](https://superspl.at/editor) or any Gaussian splat viewer.
+
+## Rendering
+
+### Production (CUDA)
+
+Use [gsplat](https://github.com/nerfstudio-project/gsplat) for production rendering. It's 100-1000x faster than pure PyTorch thanks to custom CUDA kernels and tile-based rasterization.
+
+### Development (Mac/MPS)
+
+gsplat requires CUDA. On Apple Silicon, we use a pure PyTorch renderer (`src/render.py`). It's slow (1-30 sec/frame) but functional for dataset generation.
+
+| Backend | Speed | Use Case |
+|---------|-------|----------|
+| gsplat (CUDA) | ~60 fps | Production, real-time |
+| Pure PyTorch (MPS/CPU) | 1-30 sec/frame | Development, batch rendering |
+
+**Note:** gsplat-mps exists but is AGPLv3-licensed and stuck at v0.1.3.
+
+## Dataset Generation
+
+Generate synthetic training images with varied viewpoints, lighting, and backgrounds:
+
+```bash
+# Default: varied backgrounds + lighting augmentation
+uv run src/generate_dataset.py data/splats/mint3_clean.ply -n 1000 -o data/synthetic/
+
+# With custom background images
+uv run src/generate_dataset.py data/splats/mint3_clean.ply -n 1000 --bg-dir data/backgrounds/
+
+# White backgrounds, no lighting variation
+uv run src/generate_dataset.py data/splats/mint3_clean.ply -n 1000 --bg-mode white --no-lighting
+```
+
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-o` | `data/synthetic/` | Output directory |
+| `-n` | 100 | Number of views (azimuth × elevation grid) |
+| `-d` | 1 | Downscale factor (1 = full res, 2 = half) |
+| `--bg-mode` | varied | Background: `varied` (greenhouse colors), `white`, `black`, `random` |
+| `--bg-dir` | none | Directory with background images (random crops) |
+| `--no-lighting` | off | Disable lighting augmentation |
+
+### Augmentations
+
+**Lighting** (enabled by default):
+- Color temperature: 2700K (warm) to 8000K (cool)
+- Intensity: 0.6× to 1.3×
+- Contrast: 0.9× to 1.1×
+
+**Backgrounds**:
+- `varied`: Greenhouse-like palette (whites, grays, greens, browns)
+- `--bg-dir`: Random crops from your images, resized to match
+
+### Output
+
+```
+data/synthetic/
+├── images/          # RGB renders with augmentations
+├── masks/           # Alpha masks (= segmentation)
+└── annotations.json # Bounding boxes, camera params, lighting/bg metadata
+```
+
+### GPU Rental (for large datasets)
+
+For 1000+ images, rent a GPU. RTX 3060/3070 is plenty for 31k Gaussians. Budget ~20GB storage (splat + outputs + deps).
