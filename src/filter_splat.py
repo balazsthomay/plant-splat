@@ -2,9 +2,10 @@
 Filter Gaussian splat PLY to remove background Gaussians.
 
 Strategies:
-1. Opacity threshold - remove low-opacity Gaussians
-2. Distance from centroid - remove outliers far from the plant center
-3. Bounding box - keep only Gaussians within specified bounds
+1. Mask projection - project Gaussians to cameras, keep if in foreground masks
+2. Opacity threshold - remove low-opacity Gaussians
+3. Distance from centroid - remove outliers far from the plant center
+4. Bounding box - keep only Gaussians within specified bounds
 """
 
 import argparse
@@ -12,6 +13,14 @@ import struct
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
+
+# Import COLMAP reading/projection from filter_points
+from filter_points import (
+    read_cameras_binary,
+    read_images_binary,
+    project_point,
+)
 
 
 def sigmoid(x: np.ndarray) -> np.ndarray:
@@ -69,6 +78,88 @@ def write_ply(path: Path, data: np.ndarray, properties: list[str]):
         f.write(data.tobytes())
 
 
+def filter_by_masks(
+    xyz: np.ndarray,
+    sparse_dir: Path,
+    images_dir: Path,
+    min_visible_ratio: float = 0.5,
+) -> np.ndarray:
+    """Filter Gaussians by projecting to masks.
+
+    For each Gaussian, project its center to all training cameras.
+    Keep if projection lands in foreground mask (>127) for ≥ min_visible_ratio of views.
+
+    Args:
+        xyz: [N, 3] Gaussian center positions
+        sparse_dir: COLMAP sparse reconstruction directory
+        images_dir: Directory containing masks (*_mask.png)
+        min_visible_ratio: Min fraction of views where Gaussian must be in foreground
+
+    Returns:
+        Boolean mask [N] - True = keep
+    """
+    print(f"[filter_splat] Loading COLMAP data from {sparse_dir}")
+    cameras = read_cameras_binary(sparse_dir / 'cameras.bin')
+    images = read_images_binary(sparse_dir / 'images.bin')
+    print(f"[filter_splat] Loaded {len(cameras)} cameras, {len(images)} images")
+
+    # Load masks
+    print("[filter_splat] Loading masks...")
+    masks_cache = {}
+    for image_id, img_data in images.items():
+        mask_path = images_dir / f"{Path(img_data['name']).stem}_mask.png"
+        if mask_path.exists():
+            mask = np.array(Image.open(mask_path).convert('L'))
+            masks_cache[image_id] = mask
+
+    print(f"[filter_splat] Loaded {len(masks_cache)} masks")
+    if len(masks_cache) == 0:
+        print("[filter_splat] WARNING: No masks found, skipping mask filter")
+        return np.ones(len(xyz), dtype=bool)
+
+    # Project each Gaussian to all cameras
+    print(f"[filter_splat] Projecting {len(xyz)} Gaussians to {len(images)} cameras...")
+    keep_mask = np.zeros(len(xyz), dtype=bool)
+
+    for i, pos in enumerate(xyz):
+        foreground_count = 0
+        total_checked = 0
+
+        for image_id, img_data in images.items():
+            if image_id not in masks_cache:
+                continue
+
+            camera = cameras[img_data['camera_id']]
+            mask = masks_cache[image_id]
+
+            # Project Gaussian center
+            proj = project_point(pos, img_data, camera)
+            if proj is None:
+                continue
+
+            u, v = proj
+            u_int, v_int = int(round(u)), int(round(v))
+
+            # Check bounds
+            h, w = mask.shape
+            if 0 <= u_int < w and 0 <= v_int < h:
+                total_checked += 1
+                if mask[v_int, u_int] > 127:
+                    foreground_count += 1
+
+        # Keep if in foreground for enough views
+        if total_checked > 0 and foreground_count / total_checked >= min_visible_ratio:
+            keep_mask[i] = True
+
+        # Progress
+        if (i + 1) % 5000 == 0:
+            print(f"  [{i + 1}/{len(xyz)}] processed")
+
+    kept = keep_mask.sum()
+    print(f"[filter_splat] Mask filter: {kept} / {len(xyz)} Gaussians in foreground")
+    return keep_mask
+
+
 def filter_splat(
     input_path: Path,
     output_path: Path,
@@ -76,8 +167,11 @@ def filter_splat(
     distance_threshold: float | None = None,
     bbox: tuple[float, float, float, float, float, float] | None = None,
     percentile: float = 95,
+    sparse_dir: Path | None = None,
+    images_dir: Path | None = None,
+    min_visible_ratio: float = 0.5,
 ) -> int:
-    """Filter Gaussian splat by opacity and spatial criteria.
+    """Filter Gaussian splat by mask projection and geometric criteria.
 
     Args:
         input_path: Input PLY file
@@ -87,6 +181,9 @@ def filter_splat(
         bbox: Bounding box (x_min, x_max, y_min, y_max, z_min, z_max)
         percentile: If distance_threshold is None, compute threshold as this percentile
                     of distances from high-opacity Gaussians
+        sparse_dir: COLMAP sparse reconstruction (for mask filtering)
+        images_dir: Directory with masks (for mask filtering)
+        min_visible_ratio: Min foreground visibility ratio for mask filter
 
     Returns:
         Number of Gaussians kept
@@ -102,8 +199,11 @@ def filter_splat(
     print(f"[filter_splat] Opacity range: {opacity.min():.3f} - {opacity.max():.3f}")
     print(f"[filter_splat] Opacity mean: {opacity.mean():.3f}")
 
-    # Start with all True mask
-    keep_mask = np.ones(len(data), dtype=bool)
+    # Start with mask filter (most important for isolation)
+    if sparse_dir is not None and images_dir is not None:
+        keep_mask = filter_by_masks(xyz, sparse_dir, images_dir, min_visible_ratio)
+    else:
+        keep_mask = np.ones(len(data), dtype=bool)
 
     # Filter by opacity
     opacity_mask = opacity >= opacity_threshold
@@ -161,6 +261,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Filter Gaussian splat PLY")
     parser.add_argument("input", type=Path, help="Input PLY file")
     parser.add_argument("-o", "--output", type=Path, help="Output PLY file")
+    parser.add_argument("--sparse-dir", type=Path, help="COLMAP sparse dir (for mask filtering)")
+    parser.add_argument("--images-dir", type=Path, help="Images dir with masks (for mask filtering)")
+    parser.add_argument("--min-ratio", type=float, default=0.5, help="Min foreground visibility ratio")
     parser.add_argument("--opacity", type=float, default=0.1, help="Min opacity threshold (0-1)")
     parser.add_argument("--distance", type=float, help="Max distance from centroid")
     parser.add_argument("--percentile", type=float, default=95, help="Auto-compute distance as this percentile")
@@ -172,4 +275,14 @@ if __name__ == "__main__":
     output_path = args.output or args.input.with_stem(args.input.stem + "_filtered")
     bbox = tuple(args.bbox) if args.bbox else None
 
-    filter_splat(args.input, output_path, args.opacity, args.distance, bbox, args.percentile)
+    filter_splat(
+        args.input,
+        output_path,
+        args.opacity,
+        args.distance,
+        bbox,
+        args.percentile,
+        args.sparse_dir,
+        args.images_dir,
+        args.min_ratio,
+    )

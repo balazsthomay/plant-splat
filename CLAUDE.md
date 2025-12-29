@@ -15,20 +15,23 @@ Current phase: Dataset Generation (Phase 4) — Phases 1-3 complete
 video.MOV
     ↓ ffmpeg (extract every Nth frame)
 frames/*.jpg
-    ↓ SAM 2 video predictor (src/segment.py)
+    ↓ SAM 3 text prompt (src/segment.py)
 frames/*_mask.png (binary masks)
     ↓ COLMAP (feature extraction, matching, SfM)
-sparse/0/points3D.bin (181k 3D points, includes background)
+sparse/0/points3D.bin (3D points, includes background)
     ↓ filter by mask projection (src/filter_points.py)
-sparse_filtered/0/points3D.bin (129k points, plant only)
+sparse_filtered/0/points3D.bin (plant only)
     ↓ OpenSplat (Gaussian splatting)
-plant.ply (isolated plant, no background)
+raw.ply
+    ↓ filter by mask projection (src/filter_splat.py)
+plant_clean.ply (isolated plant, no background)
 ```
 
 ### Key Scripts
 - `src/reconstruct.py`: Full pipeline orchestrator (video → splat)
-- `src/segment.py`: SAM 2 video predictor, center point prompt on frame 0
+- `src/segment.py`: SAM 3 video predictor with text prompt (CUDA only)
 - `src/filter_points.py`: Projects 3D points to cameras, keeps foreground points
+- `src/filter_splat.py`: Projects Gaussians to cameras, removes background leaks
 
 ### External Tools
 - `tools/OpenSplat/`: Patched OpenSplat with optional masked loss support
@@ -60,11 +63,11 @@ uv run python main.py
 
 ## Key Libraries
 
-- **Segmentation:** sam-2 (SAM 2 video predictor, runs on CPU)
-- **Reconstruction:** COLMAP (SfM), OpenSplat (Gaussian splatting, runs on MPS)
-- **Image Processing:** opencv, numpy, PIL
+- **Segmentation:** sam3 (SAM 3 video predictor, CUDA only, installed on VM)
+- **Reconstruction:** COLMAP (SfM), OpenSplat (Gaussian splatting)
+- **Rendering:** gsplat (CUDA)
 - **Disease Synthesis:** diffusers, peft (SDXL + LoRA)
-- **Future:** ultralytics (detection)
+- **Image Processing:** opencv, numpy, PIL
 
 ## Code Style
 

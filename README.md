@@ -2,24 +2,24 @@
 
 Synthetic data pipeline for plant disease detection using 3D Gaussian splatting.
 
-## Setup
+## Setup (GPU VM)
+
+Requires CUDA. Tested on RTX 4090.
 
 ```bash
-# Python environment
+# Clone and setup
+git clone <repo> plant-splat && cd plant-splat
 uv venv --python 3.12
 source .venv/bin/activate
 uv sync
 
-# System dependencies (macOS)
-brew install colmap opencv cmake ffmpeg
+# SAM 3 + dependencies (CUDA only, not in pyproject.toml)
+uv add "sam3 @ git+https://github.com/facebookresearch/sam3.git"
+uv add decord pycocotools
 
-# Build OpenSplat (with MPS for Apple Silicon)
-# Requires Xcode with Metal toolchain: xcodebuild -downloadComponent MetalToolchain
-git clone --depth 1 https://github.com/pierotofy/OpenSplat tools/OpenSplat
-cd tools/OpenSplat && mkdir build && cd build
-cmake -DCMAKE_PREFIX_PATH="$(python -c 'import torch; print(torch.utils.cmake_prefix_path)');$(brew --prefix opencv)/lib/cmake/opencv4" -DGPU_RUNTIME=MPS ..
-make -j8
-cd ../../..
+# Authenticate for gated model weights
+# First request access at: https://huggingface.co/facebook/sam3
+hf auth login
 ```
 
 ## Usage
@@ -52,40 +52,19 @@ uv run src/reconstruct.py data/raw/plant.MOV --isolate
 The `--isolate` pipeline:
 1. **Extract frames** from video
 2. **COLMAP** reconstructs sparse 3D point cloud
-3. **SAM 2** segments the subject in each frame
+3. **SAM 3** segments the subject using text prompt (e.g., "potted plant without pot")
 4. **Filter points** by mask projection (keep foreground only)
 5. **OpenSplat** trains on filtered points
-6. **Post-process** removes residual background Gaussians
+6. **Post-process** filters Gaussians by mask projection (removes any that leaked through)
 
-### Subject Detection
+### Segmentation
 
-**SAM 2 (default, Mac/CPU):** Uses center point prompt on frame 0. Segments whatever is at center, propagates through all frames. Plant must be centered.
-
-**SAM 3 (GPU VM):** Uses text prompts for semantic segmentation. Can exclude the pot with prompts like "potted plant without pot".
+SAM 3 uses text prompts for semantic segmentation. The default prompt excludes the pot:
 
 ```bash
-# SAM 2 (local)
 uv run src/segment.py data/colmap/mint/images/
-
-# SAM 3 (on GPU VM)
-uv run src/segment.py data/colmap/mint/images/ --model sam3 --prompt "potted plant without pot"
+uv run src/segment.py data/colmap/mint/images/ --prompt "plant leaves"
 ```
-
-### SAM 3 Setup (GPU VM only)
-
-SAM 3 requires CUDA (Triton dependency). One-time setup on VM:
-
-```bash
-# Install SAM 3 from GitHub + Linux-only dependencies
-uv add "sam3 @ git+https://github.com/facebookresearch/sam3.git"
-uv add decord pycocotools
-
-# Authenticate for gated model weights
-# First request access at: https://huggingface.co/facebook/sam3
-hf auth login
-```
-
-These packages are not in the main pyproject.toml since they don't build on macOS.
 
 ## Viewing Splats
 

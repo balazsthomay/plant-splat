@@ -2,7 +2,7 @@
 COLMAP + OpenSplat reconstruction pipeline.
 
 Converts video → frames → COLMAP SfM → Gaussian splat.
-With --isolate: adds SAM 2 masks → point filtering → post-processing for clean background removal.
+With --isolate: adds SAM 3 masks → point filtering → post-processing for clean background removal.
 """
 
 import subprocess
@@ -60,19 +60,20 @@ def extract_frames(
     return len(frames)
 
 
-def segment_frames(images_dir: Path) -> int:
-    """Run SAM 2 segmentation on all frames.
+def segment_frames(images_dir: Path, prompt: str = "potted plant without pot") -> int:
+    """Run SAM 3 segmentation on all frames.
 
-    Uses center point prompt on frame 0, propagates through video.
+    Uses text prompt for semantic segmentation, propagates through video.
 
     Args:
         images_dir: Directory containing images
+        prompt: Text prompt for SAM 3
 
     Returns:
         Number of masks generated
     """
-    from segment import segment_directory
-    return segment_directory(images_dir)
+    from segment import segment_video
+    return segment_video(images_dir, prompt)
 
 
 def filter_point_cloud(sparse_dir: Path, images_dir: Path, min_ratio: float = 0.5) -> Path:
@@ -126,14 +127,18 @@ def create_clean_project(project_dir: Path, name: str) -> Path:
 def postprocess_splat(
     input_ply: Path,
     output_ply: Path,
+    sparse_dir: Path,
+    images_dir: Path,
     opacity_threshold: float = 0.15,
     percentile: float = 92,
 ) -> Path:
-    """Post-process splat to remove background Gaussians.
+    """Post-process splat to remove background Gaussians using mask projection.
 
     Args:
         input_ply: Input PLY file
         output_ply: Output PLY file
+        sparse_dir: COLMAP sparse reconstruction directory
+        images_dir: Directory with images and masks
         opacity_threshold: Remove Gaussians below this opacity
         percentile: Remove Gaussians beyond this percentile distance
 
@@ -142,7 +147,16 @@ def postprocess_splat(
     """
     from filter_splat import filter_splat
 
-    filter_splat(input_ply, output_ply, opacity_threshold, None, None, percentile)
+    filter_splat(
+        input_ply,
+        output_ply,
+        opacity_threshold,
+        None,
+        None,
+        percentile,
+        sparse_dir,
+        images_dir,
+    )
     return output_ply
 
 
@@ -249,7 +263,7 @@ def reconstruct(
         frame_skip: Extract every Nth frame (default: 20 → ~120 frames from 60fps)
         num_iters: OpenSplat training iterations
         downscale: Image downscale factor
-        isolate: If True, run full isolation pipeline (SAM 2 + filtering + post-process)
+        isolate: If True, run full isolation pipeline (SAM 3 + filtering + post-process)
 
     Returns:
         Path to output .ply file
@@ -290,8 +304,8 @@ def reconstruct(
     sparse_dir = run_colmap(project_dir)
 
     if isolate:
-        # Step 3: SAM 2 segmentation
-        print("\n[reconstruct] Running SAM 2 segmentation...")
+        # Step 3: SAM 3 segmentation
+        print("\n[reconstruct] Running SAM 3 segmentation...")
         segment_frames(project_dir / "images")
 
         # Step 4: Filter point cloud
@@ -306,9 +320,9 @@ def reconstruct(
         raw_splat = output_dir / "splats" / f"{name}_raw.ply"
         run_opensplat(clean_project, raw_splat, num_iters, downscale)
 
-        # Step 7: Post-process
-        print("\n[reconstruct] Post-processing splat...")
-        postprocess_splat(raw_splat, splat_path)
+        # Step 7: Post-process with mask filtering
+        print("\n[reconstruct] Post-processing splat with mask filtering...")
+        postprocess_splat(raw_splat, splat_path, sparse_dir, project_dir / "images")
 
         # Clean up intermediate
         raw_splat.unlink()
@@ -333,7 +347,7 @@ if __name__ == "__main__":
     parser.add_argument("--frame-skip", type=int, default=20, help="Extract every Nth frame (default: 20)")
     parser.add_argument("--iters", type=int, default=3000, help="Training iterations")
     parser.add_argument("--downscale", type=int, default=1, help="Image downscale factor")
-    parser.add_argument("--isolate", action="store_true", help="Isolate plant (SAM 2 + filtering + post-process)")
+    parser.add_argument("--isolate", action="store_true", help="Isolate plant (SAM 3 + filtering + post-process)")
 
     args = parser.parse_args()
 
