@@ -140,14 +140,69 @@ For 1000+ images, rent a GPU. RTX 3060/3070 is plenty for 31k Gaussians. Budget 
 
 ## Disease Synthesis
 
-Apply diseases to healthy renders using SD 1.5 inpainting:
+Apply diseases to healthy renders using SDXL inpainting + a single LoRA trained on PlantSeg.
+
+**One LoRA handles all 5 diseases** (`powdery_mildew`, `rust`, `leaf_spot`, `blight`, `chlorosis`) via distinct trigger words. ~100MB, ~1-2 hours training on RTX 4090.
+
+### Step 1: Prepare Training Data (local Mac)
 
 ```bash
-# Random diseases, severity 0.3-0.7
-uv run src/synthesize_disease.py data/synthetic/ -o data/synthetic_diseased/
+# Download PlantSeg from Kaggle: https://www.kaggle.com/datasets/weitianqi/plantseg
+# Extract to data/plantsegv2/
+
+# Prepare merged dataset (all diseases in one folder)
+uv run src/prepare_disease_data.py --plantseg data/plantsegv2 --output data/disease_training --merged
+```
+
+### Step 2: Generate Training Config (local Mac)
+
+```bash
+uv run src/train_disease_lora.py \
+    --data-dir data/disease_training/all_diseases \
+    --output-dir models/lora \
+    --config-only
+```
+
+### Step 3: Train on Vast.ai (RTX 4090)
+
+```bash
+# Upload data + config
+rsync -avz data/disease_training/all_diseases/ vast:/workspace/all_diseases/
+rsync -avz models/lora/*.toml vast:/workspace/
+
+# On Vast.ai: setup kohya
+git clone https://github.com/kohya-ss/sd-scripts tools/kohya
+cd tools/kohya && pip install -r requirements.txt && accelerate config
+
+# Train single LoRA (~1-2 hours)
+accelerate launch sdxl_train_network.py \
+    --config_file="/workspace/plant_diseases_train_config.toml"
+```
+
+### Step 4: Download LoRA
+
+```bash
+scp vast:/workspace/lora/plant_diseases.safetensors models/lora/
+```
+
+### Step 5: Generate Diseased Images
+
+```bash
+# Random diseases (balanced across all 5)
+uv run src/synthesize_disease.py data/synthetic/ \
+    --lora models/lora/plant_diseases.safetensors
 
 # Specific disease
-uv run src/synthesize_disease.py data/synthetic/ --disease powdery_mildew
+uv run src/synthesize_disease.py data/synthetic/ \
+    --lora models/lora/plant_diseases.safetensors \
+    --disease rust -n 200
+
+# 200 per disease (1000 total)
+for disease in powdery_mildew rust leaf_spot blight chlorosis; do
+    uv run src/synthesize_disease.py data/synthetic/ \
+        --lora models/lora/plant_diseases.safetensors \
+        --disease $disease -n 200
+done
 ```
 
 ### Options
@@ -156,17 +211,35 @@ uv run src/synthesize_disease.py data/synthetic/ --disease powdery_mildew
 |------|---------|-------------|
 | `-o` | `data/synthetic_diseased/` | Output directory |
 | `-n` | all | Number of images |
-| `--disease` | random | `powdery_mildew`, `leaf_spot`, `rust`, `chlorosis`, `blight` |
+| `--lora` | none | Path to LoRA weights |
+| `--lora-scale` | 1.0 | LoRA influence (0-1) |
+| `--disease` | random | Disease type |
 | `--severity-min` | 0.3 | Min severity (0-1) |
 | `--severity-max` | 0.7 | Max severity (0-1) |
-| `--steps` | 30 | Diffusion steps (lower = faster) |
 
 ### Output
 
 ```
 data/synthetic_diseased/
-├── images/          # Diseased images
-├── masks/           # Plant masks
-├── disease_masks/   # Affected regions
-└── annotations.json
+├── images/           # Diseased images (mixed diseases)
+├── masks/            # Plant masks
+├── disease_masks/    # Affected regions
+└── annotations.json  # Includes disease type, severity per image
 ```
+
+## References
+
+### 3D Plant Reconstruction
+- [PlantGaussian: 3D Gaussian Splatting for Plant Modeling](https://www.sciencedirect.com/science/article/pii/S2214514125000261) - Crop Journal 2025
+- [Splanting: 3DGS Plant Dataset](https://dl.acm.org/doi/10.1145/3681758.3698009) - SIGGRAPH Asia 2024
+- [3DGS vs NeRF for Wheat](https://academic.oup.com/gigascience/article/doi/10.1093/gigascience/giaf022/8096368) - GigaScience 2025
+
+### Synthetic Data for Plant Disease
+- [PhytoSynth: Generative Models for Crop Disease](https://arxiv.org/abs/2505.01823) - arXiv 2025
+- [Synthetic Data at Scale for Plant Disease](https://www.frontiersin.org/journals/plant-science/articles/10.3389/fpls.2024.1360113/full) - Frontiers 2024
+- [DiffusionPix2Pix for Graded Disease Severity](https://www.sciencedirect.com/science/article/pii/S0168169924010810) - Computers in Agriculture 2024
+- [Diffusion for Plant Disease Augmentation](https://www.frontiersin.org/journals/plant-science/articles/10.3389/fpls.2023.1280496/full) - Frontiers 2023
+
+### ControlNet & Domain Adaptation
+- [Weed Augmentation with ControlNet](https://www.sciencedirect.com/science/article/abs/pii/S0168169925002297) - Computers in Agriculture 2025
+- [Domain-Targeted Plant Style Transfer (LoRA + ControlNet)](https://openaccess.thecvf.com/content/CVPR2024W/Vision4Ag/papers/Hartley_Domain_Targeted_Synthetic_Plant_Style_Transfer_using_Stable_Diffusion_LoRA_CVPRW_2024_paper.pdf) - CVPR 2024

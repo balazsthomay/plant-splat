@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 plant-splat is a synthetic data pipeline for plant disease detection. It uses 3D Gaussian splatting to capture real plants, then renders synthetic training images with varied lighting, viewpoints, and backgrounds. Disease variants are synthesized using diffusion models. The end goal: prove synthetic data can train models that work on real plants.
 
-Current phase: Background Removal (Phase 1.5)
+Current phase: Dataset Generation (Phase 4) — Phases 1-3 complete
 
 ## Architecture
 
@@ -63,7 +63,8 @@ uv run python main.py
 - **Segmentation:** sam-2 (SAM 2 video predictor, runs on CPU)
 - **Reconstruction:** COLMAP (SfM), OpenSplat (Gaussian splatting, runs on MPS)
 - **Image Processing:** opencv, numpy, PIL
-- **Future:** diffusers (disease synthesis), ultralytics (detection)
+- **Disease Synthesis:** diffusers, peft (SDXL + LoRA)
+- **Future:** ultralytics (detection)
 
 ## Code Style
 

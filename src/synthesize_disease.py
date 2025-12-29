@@ -1,20 +1,22 @@
 """
-Synthesize diseased plant images from healthy renders.
+Synthesize diseased plant images from healthy renders using SDXL inpainting + LoRA.
 
-Reads healthy images from data/synthetic/, applies disease using SD 1.5 inpainting,
-outputs to data/synthetic_diseased/.
+Reads healthy images from data/synthetic/, applies disease, outputs to data/synthetic_diseased/.
+Requires 16GB+ VRAM (RTX 4090/A100 GPU).
 
 Usage:
-    # Random diseases, random severity
-    uv run src/synthesize_disease.py data/synthetic/ -o data/synthetic_diseased/
+    # With single LoRA trained on all diseases (recommended)
+    uv run src/synthesize_disease.py data/synthetic/ --lora models/lora/plant_diseases.safetensors
 
     # Specific disease type
-    uv run src/synthesize_disease.py data/synthetic/ -o data/synthetic_diseased/ \
-        --disease powdery_mildew --severity-min 0.4 --severity-max 0.8
+    uv run src/synthesize_disease.py data/synthetic/ --lora models/lora/plant_diseases.safetensors --disease rust
 
-    # Fast mode (fewer steps, for testing)
-    uv run src/synthesize_disease.py data/synthetic/ -o data/synthetic_diseased/ \
-        --steps 15 -n 10
+    # Generate 200 images per disease (1000 total)
+    for disease in powdery_mildew rust leaf_spot blight chlorosis; do
+        uv run src/synthesize_disease.py data/synthetic/ \\
+            --lora models/lora/plant_diseases.safetensors \\
+            --disease $disease -n 200
+    done
 """
 
 import argparse
@@ -49,6 +51,9 @@ def synthesize_diseases(
     num_inference_steps: int = 30,
     seed: int | None = None,
     device: str | None = None,
+    model: str = "sdxl",
+    lora_path: str | None = None,
+    lora_scale: float = 1.0,
 ) -> None:
     """Synthesize diseased images from healthy dataset.
 
@@ -63,6 +68,9 @@ def synthesize_diseases(
         num_inference_steps: Diffusion steps
         seed: Random seed for reproducibility
         device: PyTorch device (auto-detect if None)
+        model: Base model ("sdxl")
+        lora_path: Path to LoRA weights
+        lora_scale: LoRA influence (0.0-1.0)
     """
     # Load source annotations
     source_ann = load_annotations(input_dir)
@@ -89,9 +97,15 @@ def synthesize_diseases(
     else:
         diseases = list(DiseaseType)
 
+    # Use SDXL inpainting
+    model_id = DiseaseAugmentor.SDXL_INPAINT
+
     # Initialize augmentor
     device = device or get_device()
     print(f"[synthesize] Device: {device}")
+    print(f"[synthesize] Model: {model} ({model_id})")
+    if lora_path:
+        print(f"[synthesize] LoRA: {lora_path} (scale={lora_scale})")
     print(f"[synthesize] Diseases: {[d.value for d in diseases]}")
     print(f"[synthesize] Severity: {severity_min:.2f} - {severity_max:.2f}")
     print(f"[synthesize] Pattern: {pattern}")
@@ -100,6 +114,9 @@ def synthesize_diseases(
 
     augmentor = DiseaseAugmentor(
         device=device,
+        model_id=model_id,
+        lora_path=lora_path,
+        lora_scale=lora_scale,
         num_inference_steps=num_inference_steps,
     )
 
@@ -176,6 +193,9 @@ def synthesize_diseases(
     output_ann = {
         "source_dir": str(input_dir),
         "n_images": len(output_annotations),
+        "model": model,
+        "lora": lora_path,
+        "lora_scale": lora_scale,
         "diseases": [d.value for d in diseases],
         "severity_range": [severity_min, severity_max],
         "pattern": pattern,
@@ -250,6 +270,19 @@ Examples:
         "--device", type=str, default=None,
         help="Device: cuda, mps, cpu (default: auto-detect)"
     )
+    parser.add_argument(
+        "--model", type=str, default="sdxl",
+        choices=["sdxl"],
+        help="Base model (SDXL 1024px, needs 16GB+ VRAM)"
+    )
+    parser.add_argument(
+        "--lora", type=str, default=None,
+        help="Path to LoRA weights (.safetensors)"
+    )
+    parser.add_argument(
+        "--lora-scale", type=float, default=1.0,
+        help="LoRA influence strength (default: 1.0)"
+    )
 
     args = parser.parse_args()
 
@@ -268,4 +301,7 @@ Examples:
         num_inference_steps=args.steps,
         seed=args.seed,
         device=args.device,
+        model=args.model,
+        lora_path=args.lora,
+        lora_scale=args.lora_scale,
     )

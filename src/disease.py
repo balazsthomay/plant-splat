@@ -1,12 +1,13 @@
 """
-Disease synthesis using Stable Diffusion 1.5 inpainting.
+Disease synthesis using SDXL inpainting + LoRA.
 
 Applies simulated plant diseases to healthy rendered images with controllable:
 - Disease type (powdery_mildew, leaf_spot, rust, chlorosis, blight)
 - Severity (0.0-1.0 continuous scale)
 - Spatial distribution (auto-generated via Perlin noise + plant mask)
 
-Supports both CUDA and MPS backends.
+Uses SDXL inpainting with optional LoRA fine-tuned on PlantSeg.
+Supports CUDA, MPS, and CPU backends.
 """
 
 from dataclasses import dataclass
@@ -38,35 +39,44 @@ class DiseaseConfig:
     typical_severity: tuple[float, float]
 
 
-# Disease prompts tuned for SD 1.5 inpainting
+# Trigger words must match prepare_disease_data.py TRIGGER_WORDS
+TRIGGER_WORDS = {
+    "powdery_mildew": "sks_mildew",
+    "rust": "sks_rust",
+    "leaf_spot": "sks_spot",
+    "blight": "sks_blight",
+    "chlorosis": "sks_chlorosis",
+}
+
+# Disease prompts for SDXL inpainting with LoRA trigger words
 DISEASE_CONFIGS: dict[DiseaseType, DiseaseConfig] = {
     DiseaseType.POWDERY_MILDEW: DiseaseConfig(
         name="powdery_mildew",
-        prompt="powdery mildew fungal infection on plant leaf, white fuzzy powder coating, plant disease, detailed texture",
+        prompt="a sks_mildew plant disease, white powdery fungal coating on leaf surface, detailed texture",
         negative_prompt="healthy green leaf, clean surface, no disease",
         typical_severity=(0.2, 0.7),
     ),
     DiseaseType.LEAF_SPOT: DiseaseConfig(
         name="leaf_spot",
-        prompt="bacterial leaf spot disease, brown circular necrotic lesions with yellow chlorotic halos, plant pathology, detailed",
+        prompt="a sks_spot plant disease, brown circular necrotic lesions with yellow halos, detailed",
         negative_prompt="healthy leaf, uniform green color, no spots",
         typical_severity=(0.2, 0.6),
     ),
     DiseaseType.RUST: DiseaseConfig(
         name="rust",
-        prompt="plant rust fungal disease, orange-brown pustules and spores on leaf surface, rusty discoloration, detailed texture",
+        prompt="a sks_rust plant disease, orange-brown rust pustules and spores on leaf, detailed texture",
         negative_prompt="healthy green leaf, no rust, no orange",
         typical_severity=(0.2, 0.6),
     ),
     DiseaseType.CHLOROSIS: DiseaseConfig(
         name="chlorosis",
-        prompt="leaf chlorosis yellowing, interveinal chlorosis with yellow leaves and green veins, nutrient deficiency, fading color",
+        prompt="a sks_chlorosis plant disease, yellow discoloration and chlorotic leaves, fading color",
         negative_prompt="deep green healthy leaf, vibrant color",
         typical_severity=(0.3, 0.8),
     ),
     DiseaseType.BLIGHT: DiseaseConfig(
         name="blight",
-        prompt="plant blight disease, dark brown-black necrotic tissue, wilting decay, severe damage, dead tissue",
+        prompt="a sks_blight plant disease, dark brown-black necrotic tissue decay, dead tissue",
         negative_prompt="healthy vibrant leaf, green, alive",
         typical_severity=(0.4, 0.9),
     ),
@@ -199,42 +209,61 @@ def get_device() -> str:
 
 
 class DiseaseAugmentor:
-    """Applies disease symptoms to healthy plant images using SD 1.5 inpainting."""
+    """Applies disease symptoms to healthy plant images using SDXL inpainting + LoRA."""
+
+    # Model variant
+    SDXL_INPAINT = "diffusers/stable-diffusion-xl-1.0-inpainting-0.1"
 
     def __init__(
         self,
         device: str | None = None,
-        model_id: str = "stable-diffusion-v1-5/stable-diffusion-inpainting",
+        model_id: str = SDXL_INPAINT,
+        lora_path: str | Path | None = None,
+        lora_scale: float = 1.0,
         num_inference_steps: int = 30,
     ):
         """
         Args:
             device: PyTorch device (auto-detect if None)
             model_id: HuggingFace model ID for inpainting
+            lora_path: Path to LoRA weights (.safetensors) or HuggingFace repo ID
+            lora_scale: LoRA influence strength (0.0-1.0)
             num_inference_steps: Default diffusion steps (more = better quality, slower)
         """
         self.device = device or get_device()
         self.model_id = model_id
+        self.lora_path = Path(lora_path) if lora_path else None
+        self.lora_scale = lora_scale
         self.num_inference_steps = num_inference_steps
         self.pipeline = None  # Lazy-loaded
         self.change_map_gen = ChangeMapGenerator()
+        self._is_sdxl = "xl" in model_id.lower()
 
     def _load_pipeline(self):
         """Lazy-load the inpainting pipeline."""
-        from diffusers import StableDiffusionInpaintPipeline
+        if self._is_sdxl:
+            from diffusers import StableDiffusionXLInpaintPipeline as Pipeline
+        else:
+            from diffusers import StableDiffusionInpaintPipeline as Pipeline
 
         print(f"[disease] Loading {self.model_id} on {self.device}...")
 
         # MPS requires float32, CUDA can use float16
         dtype = torch.float32 if self.device == "mps" else torch.float16
 
-        self.pipeline = StableDiffusionInpaintPipeline.from_pretrained(
+        self.pipeline = Pipeline.from_pretrained(
             self.model_id,
             torch_dtype=dtype,
             safety_checker=None,  # Disable NSFW filter for plant images
             requires_safety_checker=False,
         )
         self.pipeline.to(self.device)
+
+        # Load LoRA weights if specified
+        if self.lora_path:
+            print(f"[disease] Loading LoRA from {self.lora_path}...")
+            self.pipeline.load_lora_weights(str(self.lora_path))
+            print(f"[disease] LoRA loaded (scale={self.lora_scale})")
 
         # Memory optimizations
         self.pipeline.enable_attention_slicing()
@@ -258,6 +287,7 @@ class DiseaseAugmentor:
         num_inference_steps: int | None = None,
         pattern: str = "patchy",
         guidance_scale: float = 7.5,
+        lora_scale: float | None = None,
     ) -> tuple[np.ndarray, np.ndarray, dict]:
         """Apply disease to healthy plant image.
 
@@ -270,6 +300,7 @@ class DiseaseAugmentor:
             num_inference_steps: Diffusion steps (uses default if None)
             pattern: Change map pattern ("patchy", "edge", "uniform")
             guidance_scale: Classifier-free guidance scale
+            lora_scale: Override LoRA influence (uses self.lora_scale if None)
 
         Returns:
             diseased_rgb: [H, W, 3] uint8 diseased image
@@ -289,10 +320,11 @@ class DiseaseAugmentor:
         # Store original size
         orig_h, orig_w = rgb.shape[:2]
 
-        # Resize to 512x512 for SD (much faster)
-        rgb_pil = Image.fromarray(rgb).resize((512, 512), Image.Resampling.LANCZOS)
+        # Resize to model's native resolution
+        target_size = 1024 if self._is_sdxl else 512
+        rgb_pil = Image.fromarray(rgb).resize((target_size, target_size), Image.Resampling.LANCZOS)
         alpha_resized = np.array(
-            Image.fromarray(alpha).resize((512, 512), Image.Resampling.LANCZOS)
+            Image.fromarray(alpha).resize((target_size, target_size), Image.Resampling.LANCZOS)
         )
 
         # Generate change map
@@ -308,15 +340,23 @@ class DiseaseAugmentor:
         # Run inpainting
         generator = torch.Generator(self.device).manual_seed(seed) if seed else None
 
-        result = self.pipeline(
-            prompt=config.prompt,
-            negative_prompt=config.negative_prompt,
-            image=rgb_pil,
-            mask_image=mask_pil,
-            num_inference_steps=steps,
-            guidance_scale=guidance_scale,
-            generator=generator,
-        ).images[0]
+        # Build kwargs
+        pipeline_kwargs = {
+            "prompt": config.prompt,
+            "negative_prompt": config.negative_prompt,
+            "image": rgb_pil,
+            "mask_image": mask_pil,
+            "num_inference_steps": steps,
+            "guidance_scale": guidance_scale,
+            "generator": generator,
+        }
+
+        # Add LoRA scale if LoRA is loaded
+        if self.lora_path:
+            scale = lora_scale if lora_scale is not None else self.lora_scale
+            pipeline_kwargs["cross_attention_kwargs"] = {"scale": scale}
+
+        result = self.pipeline(**pipeline_kwargs).images[0]
 
         # Resize back to original
         diseased_rgb = np.array(result.resize((orig_w, orig_h), Image.Resampling.LANCZOS))
@@ -343,6 +383,9 @@ class DiseaseAugmentor:
             "num_inference_steps": steps,
             "guidance_scale": guidance_scale,
             "coverage": float(change_map.mean()),
+            "model": "sdxl",
+            "lora": str(self.lora_path) if self.lora_path else None,
+            "lora_scale": lora_scale if lora_scale is not None else self.lora_scale,
         }
 
         return diseased_rgb, change_map_full, metadata

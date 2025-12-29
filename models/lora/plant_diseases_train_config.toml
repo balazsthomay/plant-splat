@@ -1,0 +1,38 @@
+# Model
+pretrained_model_name_or_path = "stabilityai/stable-diffusion-xl-base-1.0"
+dataset_config = "/Users/thomaybalazs/Projects/plant-splat/models/lora/plant_diseases_dataset.toml"
+
+# Output
+output_dir = "/Users/thomaybalazs/Projects/plant-splat/models/lora"
+output_name = "plant_diseases"
+save_model_as = "safetensors"
+save_every_n_steps = 500
+
+# LoRA Network
+network_module = "networks.lora"
+network_dim = 64
+network_alpha = 32
+network_train_unet_only = true
+
+# Training
+max_train_steps = 1000
+train_batch_size = 1
+seed = 42
+
+# Precision & Memory
+mixed_precision = "fp16"
+gradient_checkpointing = true
+cache_latents = true
+cache_latents_to_disk = true
+cache_text_encoder_outputs = true
+cache_text_encoder_outputs_to_disk = true
+no_half_vae = true
+
+# Optimizer
+optimizer_type = "AdamW8bit"
+learning_rate = 0.0001
+lr_scheduler = "cosine"
+lr_warmup_steps = 100
+
+# xformers (comment out if not available)
+xformers = true
