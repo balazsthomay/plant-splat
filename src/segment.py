@@ -1,8 +1,10 @@
 """
-SAM 2 video segmentation for plant isolation.
+SAM 2/3 video segmentation for plant isolation.
 
-Uses video predictor with center point prompt on first frame,
-then propagates mask to all frames. Much faster than per-image segmentation.
+SAM 2: Uses video predictor with center point prompt on first frame.
+SAM 3: Uses video predictor with text prompt for semantic segmentation.
+
+SAM 3 requires CUDA (Triton dependency). Run on GPU VM for SAM 3.
 """
 
 import argparse
@@ -13,6 +15,10 @@ from pathlib import Path
 import numpy as np
 import torch
 from PIL import Image
+
+
+# Default prompts
+DEFAULT_SAM3_PROMPT = "potted plant without pot"
 
 
 def prepare_frames_dir(images_dir: Path, tmp_dir: Path) -> list[Path]:
@@ -121,6 +127,113 @@ def segment_video(
     return num_frames
 
 
+def segment_video_sam3(
+    images_dir: Path,
+    prompt: str = DEFAULT_SAM3_PROMPT,
+) -> int:
+    """Segment all frames using SAM 3 video predictor with text prompt.
+
+    Requires CUDA (Triton dependency). Run on GPU VM.
+
+    Args:
+        images_dir: Directory containing image frames
+        prompt: Text prompt for semantic segmentation (e.g., "potted plant without pot")
+
+    Returns:
+        Number of masks generated
+    """
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "SAM 3 requires CUDA. Run on a GPU VM or use --model sam2 for CPU/MPS."
+        )
+
+    from sam3.model_builder import build_sam3_video_predictor
+
+    # Get frames
+    frames = sorted(images_dir.glob("*.jpg"))
+    if not frames:
+        frames = sorted(images_dir.glob("*.jpeg")) or sorted(images_dir.glob("*.png"))
+    if not frames:
+        raise ValueError(f"No frames found in {images_dir}")
+
+    num_frames = len(frames)
+    print(f"[segment] Loading SAM 3 video predictor on CUDA...")
+    predictor = build_sam3_video_predictor(gpus_to_use=[0])
+
+    print(f"[segment] Processing {num_frames} frames with text prompt: '{prompt}'")
+
+    # Create temp video directory (SAM 3 expects video path)
+    tmp_dir = images_dir.parent / ".sam3_frames"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    for i, frame in enumerate(frames):
+        link_path = tmp_dir / f"{i:05d}.jpg"
+        if link_path.exists():
+            link_path.unlink()
+        os.symlink(frame.resolve(), link_path)
+
+    # Start session
+    response = predictor.handle_request(
+        request=dict(type="start_session", resource_path=str(tmp_dir))
+    )
+    session_id = response["session_id"]
+
+    # Add text prompt on frame 0
+    print(f"[segment] Adding text prompt on frame 0: '{prompt}'")
+    response = predictor.handle_request(
+        request=dict(
+            type="add_prompt",
+            session_id=session_id,
+            frame_index=0,
+            text=prompt,
+        )
+    )
+
+    # Propagate through video
+    print("[segment] Propagating masks through video...")
+    video_segments = {}
+    for response in predictor.handle_stream_request(
+        request=dict(type="propagate_in_video", session_id=session_id)
+    ):
+        frame_idx = response["frame_index"]
+        # SAM 3 returns masks for all detected instances
+        # Merge all masks for simplicity (union of all detected objects)
+        outputs = response.get("outputs", {})
+        if outputs:
+            masks = outputs.get("masks", [])
+            if masks:
+                # Union all instance masks
+                combined = np.zeros_like(masks[0], dtype=bool)
+                for m in masks:
+                    combined = combined | (m > 0.5)
+                video_segments[frame_idx] = combined
+
+        if (frame_idx + 1) % 50 == 0:
+            print(f"  [{frame_idx + 1}/{num_frames}] Propagated")
+
+    # Close session
+    predictor.handle_request(request=dict(type="close_session", session_id=session_id))
+
+    # Save masks alongside original frames
+    print("[segment] Saving masks...")
+    for i, frame_path in enumerate(frames):
+        if i in video_segments:
+            mask = video_segments[i].squeeze()  # [H, W] boolean
+            mask_uint8 = (mask * 255).astype(np.uint8)
+        else:
+            # No mask for this frame, use empty
+            img = Image.open(frame_path)
+            mask_uint8 = np.zeros((img.height, img.width), dtype=np.uint8)
+
+        mask_path = frame_path.parent / f"{frame_path.stem}_mask.png"
+        Image.fromarray(mask_uint8).save(mask_path)
+
+    # Cleanup temp directory
+    shutil.rmtree(tmp_dir)
+
+    print(f"[segment] ✓ Generated {num_frames} masks")
+    return num_frames
+
+
 # Keep old function name for compatibility with reconstruct.py
 def segment_directory(images_dir: Path, pattern: str = "*.jpg", device: str = "cpu") -> int:
     """Wrapper for backward compatibility."""
@@ -128,10 +241,41 @@ def segment_directory(images_dir: Path, pattern: str = "*.jpg", device: str = "c
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate segmentation masks using SAM 2 video predictor")
+    parser = argparse.ArgumentParser(
+        description="Generate segmentation masks using SAM 2 or SAM 3",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # SAM 2 (default, works on CPU/MPS)
+  uv run src/segment.py data/colmap/mint3/images/
+
+  # SAM 3 with text prompt (requires CUDA)
+  uv run src/segment.py data/colmap/mint3/images/ --model sam3
+  uv run src/segment.py data/colmap/mint3/images/ --model sam3 --prompt "plant leaves"
+        """,
+    )
     parser.add_argument("images_dir", type=Path, help="Directory containing image frames")
-    parser.add_argument("--device", default="cpu", help="Device (cpu, cuda) - MPS not supported")
-    parser.add_argument("--model", default="facebook/sam2.1-hiera-large", help="Model ID")
+    parser.add_argument(
+        "--model",
+        choices=["sam2", "sam3"],
+        default="sam2",
+        help="Model: sam2 (point prompt, CPU/MPS) or sam3 (text prompt, CUDA only)",
+    )
+    parser.add_argument(
+        "--prompt",
+        default=DEFAULT_SAM3_PROMPT,
+        help=f"Text prompt for SAM 3 (default: '{DEFAULT_SAM3_PROMPT}')",
+    )
+    parser.add_argument(
+        "--device",
+        default="cpu",
+        help="Device for SAM 2 (cpu, cuda) - ignored for SAM 3 which requires CUDA",
+    )
+    parser.add_argument(
+        "--model-id",
+        default="facebook/sam2.1-hiera-large",
+        help="HuggingFace model ID for SAM 2",
+    )
 
     args = parser.parse_args()
 
@@ -139,4 +283,7 @@ if __name__ == "__main__":
         print(f"Error: Directory not found: {args.images_dir}")
         exit(1)
 
-    segment_video(args.images_dir, args.device, args.model)
+    if args.model == "sam3":
+        segment_video_sam3(args.images_dir, args.prompt)
+    else:
+        segment_video(args.images_dir, args.device, args.model_id)
