@@ -5,6 +5,7 @@ Converts video → frames → COLMAP SfM → Gaussian splat.
 With --isolate: adds SAM 3 masks → point filtering → post-processing for clean background removal.
 """
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -13,8 +14,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 
-# Tool paths (adjust if needed)
-COLMAP_BIN = "/opt/homebrew/bin/colmap"
+# Tool paths (auto-detect or fallback)
+COLMAP_BIN = shutil.which("colmap") or "/opt/homebrew/bin/colmap"
 OPENSPLAT_BIN = Path(__file__).parent.parent / "tools/OpenSplat/build/opensplat"
 
 
