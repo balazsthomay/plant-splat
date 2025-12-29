@@ -191,18 +191,10 @@ def segment_video_sam3(
     # Propagate through video
     print("[segment] Propagating masks through video...")
     video_segments = {}
-    debug_printed = False
     for response in predictor.handle_stream_request(
         request=dict(type="propagate_in_video", session_id=session_id)
     ):
         frame_idx = response["frame_index"]
-
-        # Debug: print first response structure
-        if not debug_printed:
-            print(f"[segment] DEBUG response keys: {response.keys()}")
-            if "outputs" in response:
-                print(f"[segment] DEBUG outputs keys: {response['outputs'].keys() if isinstance(response['outputs'], dict) else type(response['outputs'])}")
-            debug_printed = True
 
         # SAM 3 returns masks for all detected instances
         # Merge all masks for simplicity (union of all detected objects)

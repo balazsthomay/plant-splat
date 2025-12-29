@@ -59,13 +59,33 @@ The `--isolate` pipeline:
 
 ### Subject Detection
 
-SAM 2 uses a center point prompt on frame 0—it clicks the exact center of the image and segments whatever object is there, then propagates that mask through all frames.
+**SAM 2 (default, Mac/CPU):** Uses center point prompt on frame 0. Segments whatever is at center, propagates through all frames. Plant must be centered.
 
-**Requirement:** Keep the plant centered when filming. The pot can be included—it provides realistic context for synthetic training data.
+**SAM 3 (GPU VM):** Uses text prompts for semantic segmentation. Can exclude the pot with prompts like "potted plant without pot".
 
-**Limitation:** SAM 2 has no semantic understanding. It segments whatever the center click lands on, so off-center plants will fail.
+```bash
+# SAM 2 (local)
+uv run src/segment.py data/colmap/mint/images/
 
-**Ideal solution:** SAM 3 supports natural language prompts ("segment the plant") but requires CUDA (Triton dependency). With CUDA, text-prompted segmentation would remove the center-framing requirement.
+# SAM 3 (on GPU VM)
+uv run src/segment.py data/colmap/mint/images/ --model sam3 --prompt "potted plant without pot"
+```
+
+### SAM 3 Setup (GPU VM only)
+
+SAM 3 requires CUDA (Triton dependency). One-time setup on VM:
+
+```bash
+# Install SAM 3 from GitHub + Linux-only dependencies
+uv add "sam3 @ git+https://github.com/facebookresearch/sam3.git"
+uv add decord pycocotools
+
+# Authenticate for gated model weights
+# First request access at: https://huggingface.co/facebook/sam3
+hf auth login
+```
+
+These packages are not in the main pyproject.toml since they don't build on macOS.
 
 ## Viewing Splats
 
