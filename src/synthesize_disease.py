@@ -162,6 +162,8 @@ def synthesize_diseases(
         print(" ✓")
 
         # Save outputs
+        import time
+        t0 = time.time()
         out_id = f"{i:04d}"
         out_img_path = output_dir / "images" / f"{out_id}.png"
         out_mask_path = output_dir / "masks" / f"{out_id}_mask.png"
@@ -170,6 +172,7 @@ def synthesize_diseases(
         Image.fromarray(diseased_rgb).save(out_img_path)
         Image.fromarray(alpha).save(out_mask_path)
         Image.fromarray(change_map).save(out_disease_mask_path)
+        print(f"[timing] save: {time.time() - t0:.1f}s")
 
         # Build annotation (extend source with disease info)
         ann = {

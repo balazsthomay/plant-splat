@@ -356,11 +356,15 @@ class DiseaseAugmentor:
             Image.fromarray(alpha).resize((target_size, target_size), Image.Resampling.LANCZOS)
         )
 
+        import time
+
         # Generate change map (determines where disease appears)
+        t0 = time.time()
         plant_mask = (alpha_resized > 127).astype(np.float32)
         if seed is not None:
             self.change_map_gen.seed = seed
         change_map = self.change_map_gen.generate(plant_mask, severity, pattern)
+        print(f"[timing] change_map: {time.time() - t0:.1f}s")
 
         # Run img2img
         generator = torch.Generator(self.device).manual_seed(seed) if seed else None
@@ -381,33 +385,42 @@ class DiseaseAugmentor:
             scale = lora_scale if lora_scale is not None else self.lora_scale
             pipeline_kwargs["cross_attention_kwargs"] = {"scale": scale}
 
+        t0 = time.time()
         result = self.pipeline(**pipeline_kwargs).images[0]
+        print(f"[timing] pipeline: {time.time() - t0:.1f}s")
+
+        t0 = time.time()
         result_np = np.array(result)
 
         # Resize back to original
         result_resized = np.array(result.resize((orig_w, orig_h), Image.Resampling.LANCZOS))
+        print(f"[timing] resize: {time.time() - t0:.1f}s")
 
+        t0 = time.time()
         # Upscale change map for blending
         change_map_full = np.array(
             Image.fromarray((change_map * 255).astype(np.uint8)).resize(
                 (orig_w, orig_h), Image.Resampling.LANCZOS
             )
         )
+
+        # Memory-efficient blend: work in-place where possible
         blend_mask = change_map_full.astype(np.float32) / 255.0
-
-        # Blend: apply disease only where change_map indicates
-        # change_map = 1 -> use generated result, change_map = 0 -> use original
-        diseased_rgb = (
-            result_resized.astype(np.float32) * blend_mask[:, :, None] +
-            rgb.astype(np.float32) * (1 - blend_mask[:, :, None])
-        ).clip(0, 255).astype(np.uint8)
-
-        # Also mask to plant area (preserve background completely)
         alpha_norm = alpha.astype(np.float32) / 255.0
-        diseased_rgb = (
-            diseased_rgb.astype(np.float32) * alpha_norm[:, :, None] +
-            rgb.astype(np.float32) * (1 - alpha_norm[:, :, None])
-        ).clip(0, 255).astype(np.uint8)
+
+        # Combined blend in one pass to reduce memory allocations
+        # disease_weight = blend_mask * alpha_norm (only apply disease inside plant)
+        disease_weight = blend_mask * alpha_norm
+        diseased_rgb = np.empty_like(rgb)
+        for c in range(3):
+            diseased_rgb[:, :, c] = (
+                result_resized[:, :, c] * disease_weight +
+                rgb[:, :, c] * (1 - disease_weight)
+            ).clip(0, 255).astype(np.uint8)
+
+        # Free memory
+        del blend_mask, alpha_norm, disease_weight, result_resized
+        print(f"[timing] blend: {time.time() - t0:.1f}s")
 
         metadata = {
             "disease_type": disease_type.value,
