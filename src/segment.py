@@ -208,8 +208,8 @@ def segment_video_sam3(
         # Merge all masks for simplicity (union of all detected objects)
         outputs = response.get("outputs", {})
         if outputs:
-            masks = outputs.get("masks", [])
-            if masks:
+            masks = outputs.get("out_binary_masks", [])
+            if masks is not None and len(masks) > 0:
                 # Union all instance masks
                 combined = np.zeros_like(masks[0], dtype=bool)
                 for m in masks:
