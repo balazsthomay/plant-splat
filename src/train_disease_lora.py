@@ -2,6 +2,7 @@
 Train LoRA on disease images using kohya-ss/sd-scripts.
 
 Generates TOML configs and runs kohya training for SDXL.
+Trains separate LoRA per disease type for better quality.
 
 Setup (on training machine):
     git clone https://github.com/kohya-ss/sd-scripts tools/kohya
@@ -10,14 +11,16 @@ Setup (on training machine):
     accelerate config  # answer: This machine, No, NO, NO, NO, all, fp16
 
 Usage:
-    # Single LoRA for all diseases (recommended)
-    uv run src/train_disease_lora.py \
-        --data-dir data/disease_training/all_diseases \
-        --output-dir models/lora \
-        --config-only
+    # Generate configs for all 5 diseases
+    uv run src/train_disease_lora.py --all --config-only
 
-    # Then on GPU machine:
-    accelerate launch sdxl_train_network.py --config_file="models/lora/plant_diseases_train_config.toml"
+    # Single disease
+    uv run src/train_disease_lora.py --data-dir data/disease_training/rust --config-only
+
+    # Then on GPU machine (run each sequentially):
+    for cfg in models/lora/*_train_config.toml; do
+        accelerate launch sdxl_train_network.py --config_file="$cfg"
+    done
 """
 
 import argparse
@@ -126,8 +129,8 @@ def check_kohya() -> Path:
 def train_lora(
     data_dir: Path,
     output_dir: Path,
-    steps: int = 1000,
-    rank: int = 64,
+    steps: int = 500,
+    rank: int = 32,
     learning_rate: float = 1e-4,
     num_repeats: int = 10,
     base_model: str = "stabilityai/stable-diffusion-xl-base-1.0",
@@ -139,8 +142,8 @@ def train_lora(
     Args:
         data_dir: Directory with training images and .txt captions
         output_dir: Output directory for LoRA and configs
-        steps: Training steps
-        rank: LoRA rank (network_dim), 64 recommended for multi-concept
+        steps: Training steps (500 per disease, ~15-20 min each on RTX 4090)
+        rank: LoRA rank (network_dim), 32 for single concept
         learning_rate: Learning rate
         num_repeats: How many times to repeat each image per epoch
         base_model: Base SDXL model
@@ -148,9 +151,8 @@ def train_lora(
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Output name: "plant_diseases" for merged, disease name otherwise
-    folder_name = data_dir.name
-    output_name = "plant_diseases" if folder_name == "all_diseases" else folder_name
+    # Output name = disease folder name
+    output_name = data_dir.name
 
     # Count images
     n_images = len(list(data_dir.glob("*.jpg"))) + len(list(data_dir.glob("*.png")))
@@ -214,46 +216,46 @@ def train_lora(
             print(f"    {f} ({size_mb:.1f} MB)")
 
 
+DISEASE_TYPES = ["powdery_mildew", "rust", "leaf_spot", "blight", "chlorosis"]
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Train LoRA on disease images using kohya-ss",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Single LoRA for all diseases (recommended)
-  uv run src/train_disease_lora.py \\
-      --data-dir data/disease_training/all_diseases \\
-      --output-dir models/lora \\
-      --config-only
+  # Generate configs for all 5 diseases (recommended)
+  uv run src/train_disease_lora.py --all --config-only
 
-  # Generate configs only (for manual training on CUDA machine)
-  uv run src/train_disease_lora.py \\
-      --data-dir data/disease_training/rust \\
-      --output-dir models/lora \\
-      --config-only
+  # Single disease
+  uv run src/train_disease_lora.py --data-dir data/disease_training/rust --config-only
 
   # Custom parameters
   uv run src/train_disease_lora.py \\
       --data-dir data/disease_training/powdery_mildew \\
-      --output-dir models/lora \\
-      --steps 1500 --rank 64 --lr 5e-5
+      --steps 500 --rank 32 --lr 5e-5 --config-only
         """,
     )
     parser.add_argument(
-        "--data-dir", type=Path, required=True,
+        "--data-dir", type=Path, default=None,
         help="Directory with training images and .txt captions"
+    )
+    parser.add_argument(
+        "--all", action="store_true",
+        help="Generate configs for all 5 disease types"
     )
     parser.add_argument(
         "--output-dir", "-o", type=Path, default=Path("models/lora"),
         help="Output directory for LoRA (default: models/lora)"
     )
     parser.add_argument(
-        "--steps", type=int, default=1000,
-        help="Training steps (default: 1000)"
+        "--steps", type=int, default=500,
+        help="Training steps (default: 500, ~15-20 min per disease)"
     )
     parser.add_argument(
-        "--rank", type=int, default=64,
-        help="LoRA rank/dim (default: 64 for multi-concept)"
+        "--rank", type=int, default=32,
+        help="LoRA rank/dim (default: 32 for single concept)"
     )
     parser.add_argument(
         "--lr", type=float, default=1e-4,
@@ -274,6 +276,44 @@ Examples:
     )
 
     args = parser.parse_args()
+
+    # Handle --all flag
+    if args.all:
+        base_dir = Path("data/disease_training")
+        if not base_dir.exists():
+            print(f"[train] Error: Base directory not found: {base_dir}")
+            sys.exit(1)
+
+        print(f"[train] Generating configs for {len(DISEASE_TYPES)} diseases...\n")
+        for disease in DISEASE_TYPES:
+            data_dir = base_dir / disease
+            if not data_dir.exists():
+                print(f"[train] Warning: Skipping {disease} (not found)")
+                continue
+
+            train_lora(
+                data_dir=data_dir,
+                output_dir=args.output_dir,
+                steps=args.steps,
+                rank=args.rank,
+                learning_rate=args.lr,
+                num_repeats=args.repeats,
+                base_model=args.base_model,
+                config_only=args.config_only,
+            )
+            print()
+
+        print(f"[train] All configs generated in {args.output_dir}")
+        print(f"[train] Train on GPU with:")
+        print(f"    for cfg in {args.output_dir}/*_train_config.toml; do")
+        print(f"        accelerate launch sdxl_train_network.py --config_file=\"$cfg\"")
+        print(f"    done")
+        return
+
+    # Single disease mode
+    if args.data_dir is None:
+        print("[train] Error: --data-dir required (or use --all)")
+        sys.exit(1)
 
     if not args.data_dir.exists():
         print(f"[train] Error: Data directory not found: {args.data_dir}")

@@ -140,9 +140,9 @@ For 1000+ images, rent a GPU. RTX 3060/3070 is plenty for 31k Gaussians. Budget 
 
 ## Disease Synthesis
 
-Apply diseases to healthy renders using SDXL inpainting + a single LoRA trained on PlantSeg.
+Apply diseases to healthy renders using SDXL img2img + per-disease LoRAs trained on PlantSeg.
 
-**One LoRA handles all 5 diseases** (`powdery_mildew`, `rust`, `leaf_spot`, `blight`, `chlorosis`) via distinct trigger words. ~100MB, ~1-2 hours training on RTX 4090.
+**Separate LoRA per disease** (`powdery_mildew`, `rust`, `leaf_spot`, `blight`, `chlorosis`) for better quality. ~25MB each, ~20 min training per disease on RTX 4090.
 
 ### Step 1: Prepare Training Data (local Mac)
 
@@ -150,59 +150,52 @@ Apply diseases to healthy renders using SDXL inpainting + a single LoRA trained 
 # Download PlantSeg from Kaggle: https://www.kaggle.com/datasets/weitianqi/plantseg
 # Extract to data/plantsegv2/
 
-# Prepare merged dataset (all diseases in one folder)
-uv run src/prepare_disease_data.py --plantseg data/plantsegv2 --output data/disease_training --merged
+# Prepare per-disease folders
+uv run src/prepare_disease_data.py --plantseg data/plantsegv2 --output data/disease_training
 ```
 
-### Step 2: Generate Training Config (local Mac)
+### Step 2: Clone & Upload to Vast.ai
 
 ```bash
-uv run src/train_disease_lora.py \
-    --data-dir data/disease_training/all_diseases \
-    --output-dir models/lora \
-    --config-only
+# On VM: clone repo
+cd /workspace && git clone <your-repo> plant-splat && cd plant-splat
+
+# From Mac: upload training data
+scp -r data/disease_training/ vast:/workspace/plant-splat/data/
 ```
 
 ### Step 3: Train on Vast.ai (RTX 4090)
 
 ```bash
-# Upload data + config
-rsync -avz data/disease_training/all_diseases/ vast:/workspace/all_diseases/
-rsync -avz models/lora/*.toml vast:/workspace/
-
-# On Vast.ai: setup kohya
+# Setup kohya
 git clone https://github.com/kohya-ss/sd-scripts tools/kohya
 cd tools/kohya && pip install -r requirements.txt && accelerate config
 
-# Train single LoRA (~1-2 hours)
-accelerate launch sdxl_train_network.py \
-    --config_file="/workspace/plant_diseases_train_config.toml"
+# Generate configs for all 5 diseases
+cd /workspace/plant-splat
+uv run src/train_disease_lora.py --all --config-only
+
+# Train all (~1.5 hours total)
+cd tools/kohya
+for cfg in /workspace/plant-splat/models/lora/*_train_config.toml; do
+    accelerate launch sdxl_train_network.py --config_file="$cfg"
+done
 ```
 
-### Step 4: Download LoRA
+### Step 4: Download LoRAs
 
 ```bash
-scp vast:/workspace/lora/plant_diseases.safetensors models/lora/
+scp vast:/workspace/plant-splat/models/lora/*.safetensors models/lora/
 ```
 
 ### Step 5: Generate Diseased Images
 
 ```bash
-# Random diseases (balanced across all 5)
-uv run src/synthesize_disease.py data/synthetic/ \
-    --lora models/lora/plant_diseases.safetensors
+# All diseases (auto-loads per-disease LoRA)
+uv run src/synthesize_disease.py data/synthetic/ --lora-dir models/lora/
 
 # Specific disease
-uv run src/synthesize_disease.py data/synthetic/ \
-    --lora models/lora/plant_diseases.safetensors \
-    --disease rust -n 200
-
-# 200 per disease (1000 total)
-for disease in powdery_mildew rust leaf_spot blight chlorosis; do
-    uv run src/synthesize_disease.py data/synthetic/ \
-        --lora models/lora/plant_diseases.safetensors \
-        --disease $disease -n 200
-done
+uv run src/synthesize_disease.py data/synthetic/ --lora-dir models/lora/ --disease rust -n 200
 ```
 
 ### Options
@@ -211,7 +204,8 @@ done
 |------|---------|-------------|
 | `-o` | `data/synthetic_diseased/` | Output directory |
 | `-n` | all | Number of images |
-| `--lora` | none | Path to LoRA weights |
+| `--lora-dir` | none | Directory with per-disease LoRAs |
+| `--lora` | none | Path to single LoRA (legacy) |
 | `--lora-scale` | 1.0 | LoRA influence (0-1) |
 | `--disease` | random | Disease type |
 | `--severity-min` | 0.3 | Min severity (0-1) |
@@ -221,7 +215,7 @@ done
 
 ```
 data/synthetic_diseased/
-├── images/           # Diseased images (mixed diseases)
+├── images/           # Diseased images
 ├── masks/            # Plant masks
 ├── disease_masks/    # Affected regions
 └── annotations.json  # Includes disease type, severity per image

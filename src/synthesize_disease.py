@@ -1,22 +1,18 @@
 """
-Synthesize diseased plant images from healthy renders using SDXL inpainting + LoRA.
+Synthesize diseased plant images from healthy renders using SDXL img2img + LoRA.
 
 Reads healthy images from data/synthetic/, applies disease, outputs to data/synthetic_diseased/.
 Requires 16GB+ VRAM (RTX 4090/A100 GPU).
 
 Usage:
-    # With single LoRA trained on all diseases (recommended)
-    uv run src/synthesize_disease.py data/synthetic/ --lora models/lora/plant_diseases.safetensors
+    # With per-disease LoRAs (recommended)
+    uv run src/synthesize_disease.py data/synthetic/ --lora-dir models/lora/
 
     # Specific disease type
-    uv run src/synthesize_disease.py data/synthetic/ --lora models/lora/plant_diseases.safetensors --disease rust
+    uv run src/synthesize_disease.py data/synthetic/ --lora-dir models/lora/ --disease rust
 
-    # Generate 200 images per disease (1000 total)
-    for disease in powdery_mildew rust leaf_spot blight chlorosis; do
-        uv run src/synthesize_disease.py data/synthetic/ \\
-            --lora models/lora/plant_diseases.safetensors \\
-            --disease $disease -n 200
-    done
+    # With single LoRA (legacy)
+    uv run src/synthesize_disease.py data/synthetic/ --lora models/lora/rust.safetensors --disease rust
 """
 
 import argparse
@@ -53,6 +49,7 @@ def synthesize_diseases(
     device: str | None = None,
     model: str = "sdxl",
     lora_path: str | None = None,
+    lora_dir: str | None = None,
     lora_scale: float = 1.0,
 ) -> None:
     """Synthesize diseased images from healthy dataset.
@@ -69,7 +66,8 @@ def synthesize_diseases(
         seed: Random seed for reproducibility
         device: PyTorch device (auto-detect if None)
         model: Base model ("sdxl")
-        lora_path: Path to LoRA weights
+        lora_path: Path to single LoRA weights
+        lora_dir: Directory with per-disease LoRAs ({disease}.safetensors)
         lora_scale: LoRA influence (0.0-1.0)
     """
     # Load source annotations
@@ -97,14 +95,16 @@ def synthesize_diseases(
     else:
         diseases = list(DiseaseType)
 
-    # Use SDXL inpainting
-    model_id = DiseaseAugmentor.SDXL_INPAINT
+    # Use SDXL base (img2img with LoRA)
+    model_id = DiseaseAugmentor.SDXL_BASE
 
     # Initialize augmentor
     device = device or get_device()
     print(f"[synthesize] Device: {device}")
     print(f"[synthesize] Model: {model} ({model_id})")
-    if lora_path:
+    if lora_dir:
+        print(f"[synthesize] LoRA dir: {lora_dir} (scale={lora_scale})")
+    elif lora_path:
         print(f"[synthesize] LoRA: {lora_path} (scale={lora_scale})")
     print(f"[synthesize] Diseases: {[d.value for d in diseases]}")
     print(f"[synthesize] Severity: {severity_min:.2f} - {severity_max:.2f}")
@@ -116,6 +116,7 @@ def synthesize_diseases(
         device=device,
         model_id=model_id,
         lora_path=lora_path,
+        lora_dir=lora_dir,
         lora_scale=lora_scale,
         num_inference_steps=num_inference_steps,
     )
@@ -277,7 +278,11 @@ Examples:
     )
     parser.add_argument(
         "--lora", type=str, default=None,
-        help="Path to LoRA weights (.safetensors)"
+        help="Path to single LoRA weights (.safetensors)"
+    )
+    parser.add_argument(
+        "--lora-dir", type=str, default=None,
+        help="Directory with per-disease LoRAs ({disease}.safetensors)"
     )
     parser.add_argument(
         "--lora-scale", type=float, default=1.0,
@@ -303,5 +308,6 @@ Examples:
         device=args.device,
         model=args.model,
         lora_path=args.lora,
+        lora_dir=args.lora_dir,
         lora_scale=args.lora_scale,
     )

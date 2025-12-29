@@ -1,12 +1,12 @@
 """
-Disease synthesis using SDXL inpainting + LoRA.
+Disease synthesis using SDXL img2img + LoRA.
 
 Applies simulated plant diseases to healthy rendered images with controllable:
 - Disease type (powdery_mildew, leaf_spot, rust, chlorosis, blight)
 - Severity (0.0-1.0 continuous scale)
 - Spatial distribution (auto-generated via Perlin noise + plant mask)
 
-Uses SDXL inpainting with optional LoRA fine-tuned on PlantSeg.
+Uses SDXL base model with img2img + LoRA fine-tuned on PlantSeg.
 Supports CUDA, MPS, and CPU backends.
 """
 
@@ -209,60 +209,60 @@ def get_device() -> str:
 
 
 class DiseaseAugmentor:
-    """Applies disease symptoms to healthy plant images using SDXL inpainting + LoRA."""
+    """Applies disease symptoms to healthy plant images using SDXL img2img + LoRA."""
 
-    # Model variant
-    SDXL_INPAINT = "diffusers/stable-diffusion-xl-1.0-inpainting-0.1"
+    # Model variant - base model for img2img (LoRA trained on this)
+    SDXL_BASE = "stabilityai/stable-diffusion-xl-base-1.0"
 
     def __init__(
         self,
         device: str | None = None,
-        model_id: str = SDXL_INPAINT,
+        model_id: str = SDXL_BASE,
         lora_path: str | Path | None = None,
+        lora_dir: str | Path | None = None,
         lora_scale: float = 1.0,
         num_inference_steps: int = 30,
     ):
         """
         Args:
             device: PyTorch device (auto-detect if None)
-            model_id: HuggingFace model ID for inpainting
-            lora_path: Path to LoRA weights (.safetensors) or HuggingFace repo ID
+            model_id: HuggingFace model ID for SDXL base
+            lora_path: Path to single LoRA weights (.safetensors)
+            lora_dir: Directory with per-disease LoRAs ({disease}.safetensors)
             lora_scale: LoRA influence strength (0.0-1.0)
             num_inference_steps: Default diffusion steps (more = better quality, slower)
         """
         self.device = device or get_device()
         self.model_id = model_id
         self.lora_path = Path(lora_path) if lora_path else None
+        self.lora_dir = Path(lora_dir) if lora_dir else None
         self.lora_scale = lora_scale
         self.num_inference_steps = num_inference_steps
         self.pipeline = None  # Lazy-loaded
         self.change_map_gen = ChangeMapGenerator()
-        self._is_sdxl = "xl" in model_id.lower()
+        self._loaded_lora: str | None = None  # Track which LoRA is loaded
 
     def _load_pipeline(self):
-        """Lazy-load the inpainting pipeline."""
-        if self._is_sdxl:
-            from diffusers import StableDiffusionXLInpaintPipeline as Pipeline
-        else:
-            from diffusers import StableDiffusionInpaintPipeline as Pipeline
+        """Lazy-load the img2img pipeline."""
+        from diffusers import StableDiffusionXLImg2ImgPipeline
 
         print(f"[disease] Loading {self.model_id} on {self.device}...")
 
         # MPS requires float32, CUDA can use float16
         dtype = torch.float32 if self.device == "mps" else torch.float16
 
-        self.pipeline = Pipeline.from_pretrained(
+        self.pipeline = StableDiffusionXLImg2ImgPipeline.from_pretrained(
             self.model_id,
             torch_dtype=dtype,
-            safety_checker=None,  # Disable NSFW filter for plant images
-            requires_safety_checker=False,
+            variant="fp16" if dtype == torch.float16 else None,
         )
         self.pipeline.to(self.device)
 
-        # Load LoRA weights if specified
+        # Load single LoRA if specified (not per-disease)
         if self.lora_path:
             print(f"[disease] Loading LoRA from {self.lora_path}...")
             self.pipeline.load_lora_weights(str(self.lora_path))
+            self._loaded_lora = str(self.lora_path)
             print(f"[disease] LoRA loaded (scale={self.lora_scale})")
 
         # Memory optimizations
@@ -277,6 +277,30 @@ class DiseaseAugmentor:
 
         print(f"[disease] Pipeline loaded ({dtype})")
 
+    def _load_disease_lora(self, disease_type: DiseaseType) -> None:
+        """Load disease-specific LoRA from lora_dir."""
+        if not self.lora_dir:
+            return
+
+        lora_file = self.lora_dir / f"{disease_type.value}.safetensors"
+        if not lora_file.exists():
+            print(f"[disease] Warning: LoRA not found for {disease_type.value}: {lora_file}")
+            return
+
+        # Skip if already loaded
+        if self._loaded_lora == str(lora_file):
+            return
+
+        # Unload previous LoRA
+        if self._loaded_lora:
+            self.pipeline.unload_lora_weights()
+
+        # Load new LoRA
+        print(f"[disease] Loading LoRA for {disease_type.value}...")
+        self.pipeline.load_lora_weights(str(lora_file))
+        self._loaded_lora = str(lora_file)
+        print(f"[disease] LoRA loaded (scale={self.lora_scale})")
+
     def apply(
         self,
         rgb: np.ndarray,
@@ -288,19 +312,21 @@ class DiseaseAugmentor:
         pattern: str = "patchy",
         guidance_scale: float = 7.5,
         lora_scale: float | None = None,
+        strength: float = 0.6,
     ) -> tuple[np.ndarray, np.ndarray, dict]:
-        """Apply disease to healthy plant image.
+        """Apply disease to healthy plant image using img2img.
 
         Args:
             rgb: [H, W, 3] uint8 healthy plant image
             alpha: [H, W] uint8 plant mask (255 = plant)
             disease_type: Type of disease to apply
-            severity: 0.0-1.0 disease severity
+            severity: 0.0-1.0 disease severity (controls affected area)
             seed: Random seed for reproducibility
             num_inference_steps: Diffusion steps (uses default if None)
             pattern: Change map pattern ("patchy", "edge", "uniform")
             guidance_scale: Classifier-free guidance scale
             lora_scale: Override LoRA influence (uses self.lora_scale if None)
+            strength: img2img strength (0=no change, 1=full regeneration)
 
         Returns:
             diseased_rgb: [H, W, 3] uint8 diseased image
@@ -314,30 +340,29 @@ class DiseaseAugmentor:
         if isinstance(disease_type, str):
             disease_type = DiseaseType(disease_type)
 
+        # Load disease-specific LoRA if using lora_dir
+        self._load_disease_lora(disease_type)
+
         config = DISEASE_CONFIGS[disease_type]
         steps = num_inference_steps or self.num_inference_steps
 
         # Store original size
         orig_h, orig_w = rgb.shape[:2]
 
-        # Resize to model's native resolution
-        target_size = 1024 if self._is_sdxl else 512
+        # Resize to model's native resolution (1024 for SDXL)
+        target_size = 1024
         rgb_pil = Image.fromarray(rgb).resize((target_size, target_size), Image.Resampling.LANCZOS)
         alpha_resized = np.array(
             Image.fromarray(alpha).resize((target_size, target_size), Image.Resampling.LANCZOS)
         )
 
-        # Generate change map
+        # Generate change map (determines where disease appears)
         plant_mask = (alpha_resized > 127).astype(np.float32)
         if seed is not None:
             self.change_map_gen.seed = seed
         change_map = self.change_map_gen.generate(plant_mask, severity, pattern)
 
-        # Convert change map to PIL mask (0 = keep, 255 = inpaint)
-        # SD inpainting expects white = inpaint region
-        mask_pil = Image.fromarray((change_map * 255).astype(np.uint8))
-
-        # Run inpainting
+        # Run img2img
         generator = torch.Generator(self.device).manual_seed(seed) if seed else None
 
         # Build kwargs
@@ -345,9 +370,9 @@ class DiseaseAugmentor:
             "prompt": config.prompt,
             "negative_prompt": config.negative_prompt,
             "image": rgb_pil,
-            "mask_image": mask_pil,
             "num_inference_steps": steps,
             "guidance_scale": guidance_scale,
+            "strength": strength,
             "generator": generator,
         }
 
@@ -357,18 +382,27 @@ class DiseaseAugmentor:
             pipeline_kwargs["cross_attention_kwargs"] = {"scale": scale}
 
         result = self.pipeline(**pipeline_kwargs).images[0]
+        result_np = np.array(result)
 
         # Resize back to original
-        diseased_rgb = np.array(result.resize((orig_w, orig_h), Image.Resampling.LANCZOS))
+        result_resized = np.array(result.resize((orig_w, orig_h), Image.Resampling.LANCZOS))
 
-        # Upscale change map for output
+        # Upscale change map for blending
         change_map_full = np.array(
             Image.fromarray((change_map * 255).astype(np.uint8)).resize(
                 (orig_w, orig_h), Image.Resampling.LANCZOS
             )
         )
+        blend_mask = change_map_full.astype(np.float32) / 255.0
 
-        # Composite: only apply disease within plant mask, preserve background
+        # Blend: apply disease only where change_map indicates
+        # change_map = 1 -> use generated result, change_map = 0 -> use original
+        diseased_rgb = (
+            result_resized.astype(np.float32) * blend_mask[:, :, None] +
+            rgb.astype(np.float32) * (1 - blend_mask[:, :, None])
+        ).clip(0, 255).astype(np.uint8)
+
+        # Also mask to plant area (preserve background completely)
         alpha_norm = alpha.astype(np.float32) / 255.0
         diseased_rgb = (
             diseased_rgb.astype(np.float32) * alpha_norm[:, :, None] +
@@ -378,12 +412,13 @@ class DiseaseAugmentor:
         metadata = {
             "disease_type": disease_type.value,
             "severity": severity,
+            "strength": strength,
             "pattern": pattern,
             "seed": seed,
             "num_inference_steps": steps,
             "guidance_scale": guidance_scale,
             "coverage": float(change_map.mean()),
-            "model": "sdxl",
+            "model": "sdxl_img2img",
             "lora": str(self.lora_path) if self.lora_path else None,
             "lora_scale": lora_scale if lora_scale is not None else self.lora_scale,
         }
