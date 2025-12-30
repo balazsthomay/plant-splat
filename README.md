@@ -4,39 +4,76 @@ Synthetic data pipeline for plant disease detection using 3D Gaussian splatting.
 
 ## Setup (GPU VM)
 
-Requires CUDA. Tested on RTX 4090.
+Requires CUDA. Tested on RTX 3070/3090/4090.
 
 ```bash
-# Clone and setup
-git clone <repo> plant-splat && cd plant-splat
-uv venv --python 3.12
-source .venv/bin/activate
-uv sync
+# Clone
+git clone https://github.com/balazsthomay/plant-splat.git && cd plant-splat
 
-# SAM 3 + dependencies (CUDA only, not in pyproject.toml)
-uv add "sam3 @ git+https://github.com/facebookresearch/sam3.git"
-uv add decord pycocotools
+# Automated setup (installs COLMAP, OpenSplat, SAM 3, dependencies)
+bash scripts/setup_vm.sh
 
 # Authenticate for gated model weights
 # First request access at: https://huggingface.co/facebook/sam3
 hf auth login
 ```
 
+### GPU Architecture
+
+The setup script auto-detects RTX 30xx (Ampere). For other GPUs:
+
+```bash
+GPU_ARCH=75 bash scripts/setup_vm.sh  # RTX 2080 (Turing)
+GPU_ARCH=86 bash scripts/setup_vm.sh  # RTX 3070/3090 (Ampere) - default
+GPU_ARCH=89 bash scripts/setup_vm.sh  # RTX 4090 (Ada)
+```
+
+### Manual Setup (if script fails)
+
+<details>
+<summary>Click to expand</summary>
+
+```bash
+# Python deps
+uv venv --python 3.12
+source .venv/bin/activate
+uv sync
+uv add "sam3 @ git+https://github.com/facebookresearch/sam3.git"
+uv add decord pycocotools
+
+# System deps
+apt install -y xvfb libopencv-dev
+
+# COLMAP with CUDA (replace 86 with your GPU arch)
+git clone https://github.com/colmap/colmap.git /opt/colmap
+cd /opt/colmap && mkdir build && cd build
+cmake .. -GNinja -DCMAKE_CUDA_ARCHITECTURES=86 -DCMAKE_BUILD_TYPE=Release
+ninja && ninja install
+
+# OpenSplat
+git clone https://github.com/pierotofy/OpenSplat.git tools/OpenSplat
+cd tools/OpenSplat && mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=86 \
+  -DCMAKE_PREFIX_PATH="$(python3 -c 'import torch; print(torch.utils.cmake_prefix_path)')"
+make -j$(nproc)
+```
+</details>
+
 ## Usage
 
 ```bash
 # Full scene (includes background)
-uv run src/reconstruct.py data/raw/plant.MOV
+xvfb-run -a uv run src/reconstruct.py data/raw/plant.MOV
 
-# Isolated plant (background removed)
-uv run src/reconstruct.py data/raw/plant.MOV --isolate
+# Isolated plant (background removed via SAM 3)
+xvfb-run -a uv run src/reconstruct.py data/raw/plant.MOV --isolate
 ```
 
 ### Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--isolate` | off | Remove background (SAM 2 + filtering + post-process) |
+| `--isolate` | off | Remove background (SAM 3 + filtering + post-process) |
 | `--name` | video filename | Project name |
 | `--frame-skip` | 20 | Extract every Nth frame |
 | `--iters` | 3000 | Training iterations |
