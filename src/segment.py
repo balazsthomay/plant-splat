@@ -23,14 +23,16 @@ DEFAULT_PROMPT = "potted plant without pot"
 def segment_video(
     images_dir: Path,
     prompt: str = DEFAULT_PROMPT,
+    batch_size: int = 10,
 ) -> int:
-    """Segment all frames using SAM 3 image predictor with text prompt.
+    """Segment all frames using SAM 3 video predictor with text prompt.
 
-    Uses per-frame processing to fit in 8GB VRAM.
+    Processes frames in small batches to fit in 8GB VRAM.
 
     Args:
         images_dir: Directory containing image frames
         prompt: Text prompt for semantic segmentation
+        batch_size: Number of frames per batch (lower = less VRAM)
 
     Returns:
         Number of masks generated
@@ -38,7 +40,7 @@ def segment_video(
     if not torch.cuda.is_available():
         raise RuntimeError("SAM 3 requires CUDA. Run on a GPU VM.")
 
-    from sam3.model_builder import build_sam3_image_predictor
+    from sam3.model_builder import build_sam3_video_predictor
 
     # Get frames
     frames = sorted(images_dir.glob("*.jpg"))
@@ -48,39 +50,78 @@ def segment_video(
         raise ValueError(f"No frames found in {images_dir}")
 
     num_frames = len(frames)
-    print(f"[segment] Loading SAM 3 image predictor on CUDA...")
-    predictor = build_sam3_image_predictor()
+    print(f"[segment] Loading SAM 3 video predictor on CUDA...")
+    predictor = build_sam3_video_predictor(gpus_to_use=[0])
 
-    print(f"[segment] Processing {num_frames} frames with text prompt: '{prompt}'")
+    print(f"[segment] Processing {num_frames} frames in batches of {batch_size}")
+    print(f"[segment] Text prompt: '{prompt}'")
 
-    # Process each frame individually (lower memory than video predictor)
-    for i, frame_path in enumerate(frames):
-        # Load image
-        img = Image.open(frame_path).convert("RGB")
-        img_np = np.array(img)
+    # Process in batches to manage VRAM
+    for batch_start in range(0, num_frames, batch_size):
+        batch_end = min(batch_start + batch_size, num_frames)
+        batch_frames = frames[batch_start:batch_end]
 
-        # Set image and get text-prompted mask
-        predictor.set_image(img_np)
-        masks, scores, _ = predictor.predict(text=prompt)
+        # Create temp directory for this batch
+        tmp_dir = images_dir.parent / ".sam3_frames"
+        if tmp_dir.exists():
+            shutil.rmtree(tmp_dir)
+        tmp_dir.mkdir(parents=True, exist_ok=True)
 
-        # Clear GPU memory between frames
+        for i, frame in enumerate(batch_frames):
+            link_path = tmp_dir / f"{i:05d}.jpg"
+            os.symlink(frame.resolve(), link_path)
+
+        # Start session for this batch
+        response = predictor.handle_request(
+            request=dict(type="start_session", resource_path=str(tmp_dir))
+        )
+        session_id = response["session_id"]
+
+        # Add text prompt on frame 0
+        predictor.handle_request(
+            request=dict(
+                type="add_prompt",
+                session_id=session_id,
+                frame_index=0,
+                text=prompt,
+            )
+        )
+
+        # Propagate through batch
+        batch_masks = {}
+        for response in predictor.handle_stream_request(
+            request=dict(type="propagate_in_video", session_id=session_id)
+        ):
+            frame_idx = response["frame_index"]
+            outputs = response.get("outputs", {})
+            if outputs:
+                masks = outputs.get("out_binary_masks", [])
+                if masks is not None and len(masks) > 0:
+                    combined = np.zeros_like(masks[0], dtype=bool)
+                    for m in masks:
+                        combined = combined | (m > 0.5)
+                    batch_masks[frame_idx] = combined
+
+        # Close session and free memory
+        predictor.handle_request(request=dict(type="close_session", session_id=session_id))
         torch.cuda.empty_cache()
 
-        # Combine all masks (union)
-        if masks is not None and len(masks) > 0:
-            combined = np.zeros(masks[0].shape, dtype=bool)
-            for m in masks:
-                combined = combined | (m > 0.5)
-            mask_uint8 = (combined.squeeze() * 255).astype(np.uint8)
-        else:
-            mask_uint8 = np.zeros((img.height, img.width), dtype=np.uint8)
+        # Save masks for this batch
+        for i, frame_path in enumerate(batch_frames):
+            if i in batch_masks:
+                mask = batch_masks[i].squeeze()
+                mask_uint8 = (mask * 255).astype(np.uint8)
+            else:
+                img = Image.open(frame_path)
+                mask_uint8 = np.zeros((img.height, img.width), dtype=np.uint8)
 
-        # Save mask
-        mask_path = frame_path.parent / f"{frame_path.stem}_mask.png"
-        Image.fromarray(mask_uint8).save(mask_path)
+            mask_path = frame_path.parent / f"{frame_path.stem}_mask.png"
+            Image.fromarray(mask_uint8).save(mask_path)
 
-        if (i + 1) % 20 == 0:
-            print(f"  [{i + 1}/{num_frames}] Processed")
+        # Cleanup temp directory
+        shutil.rmtree(tmp_dir)
+
+        print(f"  [{batch_end}/{num_frames}] Processed")
 
     print(f"[segment] ✓ Generated {num_frames} masks")
     return num_frames
