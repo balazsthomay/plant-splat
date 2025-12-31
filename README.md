@@ -4,7 +4,14 @@ Synthetic data pipeline for plant disease detection using 3D Gaussian splatting.
 
 ## Setup (GPU VM)
 
-Requires CUDA. Tested on RTX 3070/3090/4090.
+Requires CUDA.
+
+| Mode | Min VRAM | Recommended |
+|------|----------|-------------|
+| Full scene | 8GB | RTX 3070+ |
+| `--isolate` (SAM 3 text prompts) | **16GB** | RTX 4090, A10, A100 |
+
+> **Note:** SAM 3 text prompts (e.g., "potted plant without pot") require processing the entire video in one session for temporal consistency. This needs 16GB+ VRAM.
 
 ```bash
 # Clone

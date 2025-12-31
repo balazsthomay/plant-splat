@@ -128,18 +128,17 @@ def create_clean_project(project_dir: Path, name: str) -> Path:
 def postprocess_splat(
     input_ply: Path,
     output_ply: Path,
-    sparse_dir: Path,
-    images_dir: Path,
     opacity_threshold: float = 0.15,
     percentile: float = 92,
 ) -> Path:
-    """Post-process splat to remove background Gaussians using mask projection.
+    """Post-process splat to remove background Gaussians.
+
+    Uses geometric filtering (opacity + distance from centroid).
+    Mask-based filtering happens at COLMAP point level (filter_points.py).
 
     Args:
         input_ply: Input PLY file
         output_ply: Output PLY file
-        sparse_dir: COLMAP sparse reconstruction directory
-        images_dir: Directory with images and masks
         opacity_threshold: Remove Gaussians below this opacity
         percentile: Remove Gaussians beyond this percentile distance
 
@@ -148,16 +147,7 @@ def postprocess_splat(
     """
     from filter_splat import filter_splat
 
-    filter_splat(
-        input_ply,
-        output_ply,
-        opacity_threshold,
-        None,
-        None,
-        percentile,
-        sparse_dir,
-        images_dir,
-    )
+    filter_splat(input_ply, output_ply, opacity_threshold, None, None, percentile)
     return output_ply
 
 
@@ -186,11 +176,12 @@ def run_colmap(project_dir: Path, single_camera: bool = True) -> Path:
     ], "COLMAP feature extraction", timeout=1200)
 
     # Sequential matching (optimal for video)
+    # Note: loop_detection disabled - requires vocabulary tree file
     run([
         COLMAP_BIN, "sequential_matcher",
         "--database_path", str(db_path),
         "--SequentialMatching.overlap", "10",
-        "--SequentialMatching.loop_detection", "1",
+        "--SequentialMatching.loop_detection", "0",
     ], "COLMAP sequential matching", timeout=1200)
 
     # Mapper (SfM)
@@ -321,9 +312,9 @@ def reconstruct(
         raw_splat = output_dir / "splats" / f"{name}_raw.ply"
         run_opensplat(clean_project, raw_splat, num_iters, downscale)
 
-        # Step 7: Post-process with mask filtering
-        print("\n[reconstruct] Post-processing splat with mask filtering...")
-        postprocess_splat(raw_splat, splat_path, sparse_dir, project_dir / "images")
+        # Step 7: Post-process (geometric filtering)
+        print("\n[reconstruct] Post-processing splat...")
+        postprocess_splat(raw_splat, splat_path)
 
         # Clean up intermediate
         raw_splat.unlink()
