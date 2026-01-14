@@ -118,7 +118,7 @@ for cfg in "$PROJECT_DIR"/models/lora/*_train_config.toml; do
 
     echo ""
     echo "[$disease] Training..."
-    accelerate launch sdxl_train_network.py --config_file="$cfg"
+    uv run accelerate launch sdxl_train_network.py --config_file="$cfg"
 done
 
 cd "$PROJECT_DIR"
