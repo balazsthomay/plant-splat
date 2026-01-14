@@ -110,15 +110,19 @@ else
     echo "WARNING: HuggingFace not authenticated. Run: hf auth login"
 fi
 
+# Set environment variables permanently
+echo ""
+echo "[+] Setting environment variables..."
+grep -q "OMP_NUM_THREADS" ~/.bashrc || echo 'export OMP_NUM_THREADS=8' >> ~/.bashrc
+grep -q "QT_QPA_PLATFORM" ~/.bashrc || echo 'export QT_QPA_PLATFORM=offscreen' >> ~/.bashrc
+export OMP_NUM_THREADS=8
+export QT_QPA_PLATFORM=offscreen
+
 # Environment setup
 echo ""
 echo "=============================================="
 echo "Setup complete!"
 echo "=============================================="
-echo ""
-echo "Environment variables (add to ~/.bashrc):"
-echo "  export OMP_NUM_THREADS=8"
-echo "  export QT_QPA_PLATFORM=offscreen"
 echo ""
 echo "Run pipeline:"
 echo "  xvfb-run -a uv run src/reconstruct.py data/raw/plant.MOV --isolate"
