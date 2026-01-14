@@ -20,19 +20,23 @@ cd "$PROJECT_DIR"
 # 1. Check Kaggle credentials
 echo ""
 echo "[1/6] Checking Kaggle credentials..."
-if [ ! -f ~/.kaggle/kaggle.json ]; then
+if [ -n "$KAGGLE_USERNAME" ] && [ -n "$KAGGLE_KEY" ]; then
+    echo "Kaggle credentials: OK (env vars)"
+elif [ -f ~/.kaggle/kaggle.json ]; then
+    chmod 600 ~/.kaggle/kaggle.json
+    echo "Kaggle credentials: OK (file)"
+else
     echo "ERROR: Kaggle credentials not found."
     echo ""
-    echo "Setup instructions:"
-    echo "  1. Go to https://www.kaggle.com/settings"
-    echo "  2. Click 'Create New Token' (downloads kaggle.json)"
-    echo "  3. Upload to VM: scp kaggle.json vast:~/.kaggle/"
-    echo "  4. Run: chmod 600 ~/.kaggle/kaggle.json"
-    echo "  5. Re-run this script"
+    echo "Option 1 - Environment variables:"
+    echo "  export KAGGLE_USERNAME='your_username'"
+    echo "  export KAGGLE_KEY='your_api_key'"
+    echo ""
+    echo "Option 2 - Config file:"
+    echo "  scp kaggle.json vast:~/.kaggle/"
+    echo "  chmod 600 ~/.kaggle/kaggle.json"
     exit 1
 fi
-chmod 600 ~/.kaggle/kaggle.json
-echo "Kaggle credentials: OK"
 
 # 2. Install kohya-ss
 echo ""
