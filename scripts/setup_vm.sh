@@ -70,7 +70,12 @@ echo "COLMAP: $(/usr/local/bin/colmap -h 2>&1 | head -1)"
 # 3. Build OpenSplat
 echo ""
 echo "[3/5] Building OpenSplat..."
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve project dir robustly (works whether script is run via absolute or relative path)
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+if [[ ! "$SCRIPT_PATH" = /* ]]; then
+    SCRIPT_PATH="$(pwd)/$SCRIPT_PATH"
+fi
+SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 OPENSPLAT_DIR="$PROJECT_DIR/tools/OpenSplat"
 
