@@ -20,7 +20,7 @@ cd "$PROJECT_DIR"
 # 1. Check Kaggle credentials
 echo ""
 echo "[1/6] Checking Kaggle credentials..."
-if [ -n "$KAGGLE_USERNAME" ] && [ -n "$KAGGLE_KEY" ]; then
+if [ -n "$KAGGLE_USERNAME" ] && [ -n "$KAGGLE_API_TOKEN" ]; then
     echo "Kaggle credentials: OK (env vars)"
 elif [ -f ~/.kaggle/kaggle.json ]; then
     chmod 600 ~/.kaggle/kaggle.json
@@ -30,7 +30,7 @@ else
     echo ""
     echo "Option 1 - Environment variables:"
     echo "  export KAGGLE_USERNAME='your_username'"
-    echo "  export KAGGLE_KEY='your_api_key'"
+    echo "  export KAGGLE_API_TOKEN='your_api_key'"
     echo ""
     echo "Option 2 - Config file:"
     echo "  scp kaggle.json vast:~/.kaggle/"
