@@ -46,12 +46,15 @@ if [ -f "$KOHYA_DIR/sdxl_train_network.py" ]; then
     echo "kohya-ss already installed, skipping..."
 else
     git clone https://github.com/kohya-ss/sd-scripts "$KOHYA_DIR"
-    cd "$KOHYA_DIR"
-    pip install -r requirements.txt
+fi
 
-    # Configure accelerate (non-interactive)
-    mkdir -p ~/.cache/huggingface/accelerate
-    cat > ~/.cache/huggingface/accelerate/default_config.yaml << 'EOF'
+# Install kohya dependencies via uv
+echo "Installing kohya dependencies..."
+uv add "numpy<2" toml imagesize voluptuous albumentations altair bitsandbytes dadaptation lion-pytorch prodigyopt schedulefree xformers
+
+# Configure accelerate (non-interactive)
+mkdir -p ~/.cache/huggingface/accelerate
+cat > ~/.cache/huggingface/accelerate/default_config.yaml << 'EOF'
 compute_environment: LOCAL_MACHINE
 distributed_type: 'NO'
 downcast_bf16: 'no'
@@ -68,9 +71,7 @@ tpu_use_cluster: false
 tpu_use_sudo: false
 use_cpu: false
 EOF
-    echo "accelerate configured"
-    cd "$PROJECT_DIR"
-fi
+echo "accelerate configured"
 echo "kohya-ss: OK"
 
 # 3. Download PlantSeg dataset
