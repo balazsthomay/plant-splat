@@ -116,20 +116,8 @@ Load `.ply` files in [SuperSplat](https://superspl.at/editor) or any Gaussian sp
 
 ## Rendering
 
-### Production (CUDA)
-
 Use [gsplat](https://github.com/nerfstudio-project/gsplat) for production rendering. It's 100-1000x faster than pure PyTorch thanks to custom CUDA kernels and tile-based rasterization.
 
-### Development (Mac/MPS)
-
-gsplat requires CUDA. On Apple Silicon, we use a pure PyTorch renderer (`src/render.py`). It's slow (1-30 sec/frame) but functional for dataset generation.
-
-| Backend | Speed | Use Case |
-|---------|-------|----------|
-| gsplat (CUDA) | ~60 fps | Production, real-time |
-| Pure PyTorch (MPS/CPU) | 1-30 sec/frame | Development, batch rendering |
-
-**Note:** gsplat-mps exists but is AGPLv3-licensed and stuck at v0.1.3.
 
 ## Dataset Generation
 
@@ -177,61 +165,25 @@ data/synthetic/
 └── annotations.json # Bounding boxes, camera params, lighting/bg metadata
 ```
 
-### GPU Rental (for large datasets)
-
-For 1000+ images, rent a GPU. RTX 3060/3070 is plenty for 31k Gaussians. Budget ~20GB storage (splat + outputs + deps).
-
 ## Disease Synthesis
 
 Apply diseases to healthy renders using SDXL img2img + per-disease LoRAs trained on PlantSeg.
 
-**Separate LoRA per disease** (`powdery_mildew`, `rust`, `leaf_spot`, `blight`, `chlorosis`) for better quality. ~25MB each, ~20 min training per disease on RTX 4090.
+Diseases: `powdery_mildew`, `rust`, `leaf_spot`, `blight`, `chlorosis`
 
-### Step 1: Prepare Training Data (local Mac)
+### Train LoRAs (on GPU VM)
 
-```bash
-# Download PlantSeg from Kaggle: https://www.kaggle.com/datasets/weitianqi/plantseg
-# Extract to data/plantsegv2/
-
-# Prepare per-disease folders
-uv run src/prepare_disease_data.py --plantseg data/plantsegv2 --output data/disease_training
-```
-
-### Step 2: Clone & Upload to Vast.ai
+Prerequisites: [Kaggle API credentials](https://www.kaggle.com/settings) → Create New Token
 
 ```bash
-# On VM: clone repo
-cd /workspace && git clone <your-repo> plant-splat && cd plant-splat
+export KAGGLE_USERNAME='your_username'
+export KAGGLE_API_TOKEN='your_api_key'
 
-# From Mac: upload training data
-scp -r data/disease_training/ vast:/workspace/plant-splat/data/
+# Automated: downloads PlantSeg, installs kohya, trains all 5 LoRAs (~1.5 hours)
+bash scripts/train_loras.sh
 ```
 
-### Step 3: Train on Vast.ai (RTX 4090)
-
-```bash
-# Setup kohya
-git clone https://github.com/kohya-ss/sd-scripts tools/kohya
-cd tools/kohya && pip install -r requirements.txt && accelerate config
-
-# Generate configs for all 5 diseases
-cd /workspace/plant-splat
-uv run src/train_disease_lora.py --all --config-only
-
-# Train all (~1.5 hours total)
-cd tools/kohya
-for cfg in /workspace/plant-splat/models/lora/*_train_config.toml; do
-    accelerate launch sdxl_train_network.py --config_file="$cfg"
-done
-```
-
-### Step 4: Download LoRAs
-
-```bash
-scp vast:/workspace/plant-splat/models/lora/*.safetensors models/lora/
-```
-
-### Step 5: Generate Diseased Images
+### Generate Diseased Images
 
 ```bash
 # All diseases (auto-loads per-disease LoRA)
@@ -248,8 +200,6 @@ uv run src/synthesize_disease.py data/synthetic/ --lora-dir models/lora/ --disea
 | `-o` | `data/synthetic_diseased/` | Output directory |
 | `-n` | all | Number of images |
 | `--lora-dir` | none | Directory with per-disease LoRAs |
-| `--lora` | none | Path to single LoRA (legacy) |
-| `--lora-scale` | 1.0 | LoRA influence (0-1) |
 | `--disease` | random | Disease type |
 | `--severity-min` | 0.3 | Min severity (0-1) |
 | `--severity-max` | 0.7 | Max severity (0-1) |
