@@ -148,43 +148,27 @@ class PlantSegDataset(Dataset):
         self.task = task
         self.transform = transform
 
-        # Load COCO annotations
-        with open(self.root / "coco_annotations.json") as f:
-            coco = json.load(f)
-
-        # Build category id → name mapping
-        cat_id_to_name = {c["id"]: c["name"] for c in coco["categories"]}
-
-        # Build image id → category ids mapping (from annotations)
-        img_to_cats = {}
-        for ann in coco["annotations"]:
-            img_id = ann["image_id"]
-            cat_id = ann["category_id"]
-            if img_id not in img_to_cats:
-                img_to_cats[img_id] = set()
-            img_to_cats[img_id].add(cat_id)
-
-        # Build image id → file path mapping
-        img_id_to_file = {img["id"]: img["file_name"] for img in coco["images"]}
-
-        # Build samples
+        # Load Metadatav2.csv (has correct filenames, unlike coco_annotations.json)
+        import csv
         self.samples = []
-        for img_id, cat_ids in img_to_cats.items():
-            # Get primary category (first one)
-            cat_id = next(iter(cat_ids))
-            cat_name = cat_id_to_name[cat_id]
+        with open(self.root / "Metadatav2.csv") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                filename = row["Name"]
+                disease = row["Disease"]
 
-            if task == "binary":
-                label = 1  # all PlantSegV2 images are diseased
-            else:
-                # Map to our 5 diseases
-                mapped = map_plantseg_category(cat_name)
-                if mapped is None:
-                    continue  # skip unmappable
-                label = DISEASE_TO_IDX[mapped]
+                if task == "binary":
+                    label = 1  # all PlantSegV2 images are diseased
+                else:
+                    # Map to our 5 diseases
+                    mapped = map_plantseg_category(disease)
+                    if mapped is None:
+                        continue  # skip unmappable
+                    label = DISEASE_TO_IDX[mapped]
 
-            img_path = self.root / "images" / img_id_to_file[img_id]
-            self.samples.append((img_path, label))
+                img_path = self.root / "images" / filename
+                if img_path.exists():
+                    self.samples.append((img_path, label))
 
         if max_samples:
             self.samples = self.samples[:max_samples]
