@@ -33,6 +33,11 @@ if [ ! -d "data/plantsegv2/images" ]; then
     kaggle datasets download -d weitianqi/plantseg -p data/
     unzip -q data/plantseg.zip -d data/plantsegv2
     rm data/plantseg.zip
+    # Fix nested extraction (zip contains plantsegv2/ folder)
+    if [ -d "data/plantsegv2/plantsegv2" ]; then
+        mv data/plantsegv2/plantsegv2/* data/plantsegv2/
+        rmdir data/plantsegv2/plantsegv2
+    fi
 fi
 echo "  PlantSegV2: $(ls data/plantsegv2/images/ | wc -l) images"
 

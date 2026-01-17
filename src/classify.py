@@ -541,11 +541,16 @@ def cmd_experiment(args):
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
 
-    model = create_model(2, backbone=args.backbone)
-    train(model, train_loader, val_loader, epochs=args.epochs, output_dir=output_dir / "binary", device=device)
+    binary_ckpt_path = output_dir / "binary" / "best.pt"
+    if binary_ckpt_path.exists():
+        print(f"Checkpoint exists, skipping training: {binary_ckpt_path}")
+    else:
+        model = create_model(2, backbone=args.backbone)
+        train(model, train_loader, val_loader, epochs=args.epochs, output_dir=output_dir / "binary", device=device)
 
     # Evaluate on synthetic
-    checkpoint = torch.load(output_dir / "binary" / "best.pt", weights_only=False)
+    model = create_model(2, backbone=args.backbone)
+    checkpoint = torch.load(binary_ckpt_path, weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
     print("\n[Binary] Synthetic test:")
     results["binary_synthetic"] = evaluate(model, val_loader, ["healthy", "diseased"], device=device)
@@ -571,10 +576,15 @@ def cmd_experiment(args):
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
 
-    model = create_model(5, backbone=args.backbone)
-    train(model, train_loader, val_loader, epochs=args.epochs, output_dir=output_dir / "multiclass", device=device)
+    multiclass_ckpt_path = output_dir / "multiclass" / "best.pt"
+    if multiclass_ckpt_path.exists():
+        print(f"Checkpoint exists, skipping training: {multiclass_ckpt_path}")
+    else:
+        model = create_model(5, backbone=args.backbone)
+        train(model, train_loader, val_loader, epochs=args.epochs, output_dir=output_dir / "multiclass", device=device)
 
-    checkpoint = torch.load(output_dir / "multiclass" / "best.pt", weights_only=False)
+    model = create_model(5, backbone=args.backbone)
+    checkpoint = torch.load(multiclass_ckpt_path, weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
     print("\n[Multiclass] Synthetic test:")
     results["multiclass_synthetic"] = evaluate(model, val_loader, DISEASE_CLASSES, device=device)
