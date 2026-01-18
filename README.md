@@ -214,6 +214,23 @@ data/synthetic_diseased/
 └── annotations.json  # Includes disease type, severity per image
 ```
 
+## Validation
+
+Train a classifier on synthetic data, test on real images:
+
+```bash
+bash scripts/run_experiment.sh
+```
+
+### Results (ResNet50, PlantSegV2 test set)
+
+| Task | Accuracy |
+|------|----------|
+| Binary (healthy vs diseased) | **99.5%** |
+| 5-way (disease classification) | 16.2% |
+
+Binary classification proves the thesis: synthetic renders from Gaussian splats transfer to real photographs. 5-way classification needs more data or better disease synthesis.
+
 ## References
 
 ### 3D Plant Reconstruction

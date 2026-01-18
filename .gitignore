@@ -19,3 +19,5 @@ tools/
 .DS_Store
 models/
 synthetic_data.tar.gz
+results/
+logs/
