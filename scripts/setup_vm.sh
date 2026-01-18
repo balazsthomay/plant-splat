@@ -15,9 +15,19 @@ echo "=============================================="
 echo "plant-splat VM Setup"
 echo "=============================================="
 
-# Detect GPU architecture
-GPU_ARCH=${GPU_ARCH:-86}  # Default to RTX 3070 (Ampere)
-echo "GPU architecture: sm_$GPU_ARCH (set GPU_ARCH env var to override)"
+# Auto-detect GPU architecture
+if [ -z "$GPU_ARCH" ]; then
+    COMPUTE_CAP=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d '.')
+    if [ -n "$COMPUTE_CAP" ]; then
+        GPU_ARCH=$COMPUTE_CAP
+        echo "GPU architecture: sm_$GPU_ARCH (auto-detected)"
+    else
+        GPU_ARCH=86
+        echo "GPU architecture: sm_$GPU_ARCH (default, set GPU_ARCH to override)"
+    fi
+else
+    echo "GPU architecture: sm_$GPU_ARCH (from env)"
+fi
 
 # Check CUDA
 if ! command -v nvcc &> /dev/null; then

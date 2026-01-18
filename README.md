@@ -2,43 +2,31 @@
 
 Synthetic data pipeline for plant disease detection using 3D Gaussian splatting.
 
-## Setup (GPU VM)
+**Result:** Classifier trained on synthetic renders achieves **99.5% accuracy** on real photographs.
 
-Requires CUDA.
-
-| Mode | Min VRAM | Recommended |
-|------|----------|-------------|
-| Full scene | 8GB | RTX 3070+ |
-| `--isolate` (SAM 3 text prompts) | **16GB** | RTX 4090, A10, A100 |
-
-> **Note:** SAM 3 text prompts (e.g., "potted plant without pot") require processing the entire video in one session for temporal consistency. This needs 16GB+ VRAM.
+## Quick Start
 
 ```bash
-# Clone
+# Setup (GPU VM, 16GB+ VRAM: RTX 4070+, A10, A100)
 git clone https://github.com/balazsthomay/plant-splat.git && cd plant-splat
-
-# Automated setup (installs COLMAP, OpenSplat, SAM 3, dependencies)
-bash scripts/setup_vm.sh
-
-# Authenticate for gated model weights
-# First request access at: https://huggingface.co/facebook/sam3
+bash scripts/setup_vm.sh  # Auto-detects GPU
 hf auth login
+
+# Full pipeline
+xvfb-run -a uv run src/reconstruct.py data/raw/plant.MOV --isolate
+uv run src/generate_dataset.py data/splats/plant_clean.ply -n 1000
+uv run src/synthesize_disease.py data/synthetic/ --lora-dir models/lora/
+bash scripts/run_experiment.sh
 ```
 
-### GPU Architecture
+## Setup
 
-The setup script auto-detects RTX 30xx (Ampere). For other GPUs:
+Requires CUDA with **16GB+ VRAM**. SAM 3 text prompts need full video in memory for temporal consistency.
 
-```bash
-GPU_ARCH=75 bash scripts/setup_vm.sh  # RTX 2080 (Turing)
-GPU_ARCH=86 bash scripts/setup_vm.sh  # RTX 3070/3090 (Ampere) - default
-GPU_ARCH=89 bash scripts/setup_vm.sh  # RTX 4090 (Ada)
-```
-
-### Manual Setup (if script fails)
+`scripts/setup_vm.sh` auto-detects GPU architecture and installs COLMAP, OpenSplat, and SAM 3.
 
 <details>
-<summary>Click to expand</summary>
+<summary>Manual setup (if script fails)</summary>
 
 ```bash
 # Python deps
@@ -51,16 +39,16 @@ uv add decord pycocotools
 # System deps
 apt install -y xvfb libopencv-dev
 
-# COLMAP with CUDA (replace 86 with your GPU arch)
+# COLMAP with CUDA
 git clone https://github.com/colmap/colmap.git /opt/colmap
 cd /opt/colmap && mkdir build && cd build
-cmake .. -GNinja -DCMAKE_CUDA_ARCHITECTURES=86 -DCMAKE_BUILD_TYPE=Release
+cmake .. -GNinja -DCMAKE_CUDA_ARCHITECTURES=89 -DCMAKE_BUILD_TYPE=Release
 ninja && ninja install
 
 # OpenSplat
 git clone https://github.com/pierotofy/OpenSplat.git tools/OpenSplat
 cd tools/OpenSplat && mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=86 \
+cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=89 \
   -DCMAKE_PREFIX_PATH="$(python3 -c 'import torch; print(torch.utils.cmake_prefix_path)')"
 make -j$(nproc)
 ```
