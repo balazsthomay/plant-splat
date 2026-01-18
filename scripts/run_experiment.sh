@@ -24,7 +24,7 @@ echo "  Synthetic: $(ls data/synthetic/images/*.png | wc -l) + $(ls data/synthet
 
 # 2. Download PlantSegV2 if needed
 echo "[2/3] Checking PlantSegV2..."
-if [ ! -d "data/plantsegv2/images" ]; then
+if [ ! -f "data/plantsegv2/Metadatav2.csv" ]; then
     if [ -z "$KAGGLE_USERNAME" ] || [ -z "$KAGGLE_API_TOKEN" ]; then
         echo "ERROR: Set KAGGLE_USERNAME and KAGGLE_API_TOKEN"
         exit 1
@@ -39,7 +39,12 @@ if [ ! -d "data/plantsegv2/images" ]; then
         rmdir data/plantsegv2/plantsegv2
     fi
 fi
-echo "  PlantSegV2: $(ls data/plantsegv2/images/ | wc -l) images"
+# Flatten images if in subdirs (train/val/test)
+if [ -d "data/plantsegv2/images/train" ]; then
+    mv data/plantsegv2/images/*/* data/plantsegv2/images/
+    rmdir data/plantsegv2/images/train data/plantsegv2/images/val data/plantsegv2/images/test 2>/dev/null || true
+fi
+echo "  PlantSegV2: $(ls data/plantsegv2/images/*.jpg 2>/dev/null | wc -l) images"
 
 # 3. Run experiment
 echo "[3/3] Running experiment..."
